@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Orcest AI — System Status</title>
+<meta name="description" content="Real-time status monitoring for the Orcest AI ecosystem">
+<meta http-equiv="refresh" content="60">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh}
+a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1000px;margin:0 auto;padding:20px}
+.header{text-align:center;padding:40px 20px 20px}
+.header h1{font-size:2rem;font-weight:800;color:#f8fafc;margin-bottom:4px}
+.header p{color:#94a3b8;font-size:.9rem}
+.overall{text-align:center;padding:24px;margin:20px 0;border-radius:16px;font-size:1.2rem;font-weight:700}
+.status-operational{background:#052e16;border:1px solid #166534;color:#4ade80}
+.status-degraded{background:#422006;border:1px solid #92400e;color:#fbbf24}
+.status-down{background:#450a0a;border:1px solid #991b1b;color:#f87171}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:20px 0}
+.stat{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px;text-align:center}
+.stat .num{font-size:1.8rem;font-weight:800;color:#60a5fa}
+.stat .label{color:#94a3b8;font-size:.8rem;margin-top:4px}
+.section{margin:30px 0}
+.section h2{font-size:1.3rem;color:#f8fafc;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #1f2937}
+.svc-grid{display:flex;flex-direction:column;gap:8px}
+.svc{display:grid;grid-template-columns:1fr auto auto auto;gap:16px;align-items:center;background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px 20px}
+.svc:hover{border-color:#374151}
+.svc-name{font-weight:600;color:#f8fafc;font-size:.95rem}
+.svc-desc{color:#94a3b8;font-size:.8rem;margin-top:2px}
+.svc-type{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase}
+.type-web{background:#1e3a5f;color:#60a5fa}
+.type-api{background:#1a3a2a;color:#4ade80}
+.type-internal{background:#3a2a1a;color:#fbbf24}
+.badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:.8rem;font-weight:600}
+.badge-operational{background:#052e16;color:#4ade80}
+.badge-degraded{background:#422006;color:#fbbf24}
+.badge-down{background:#450a0a;color:#f87171}
+.badge-timeout{background:#2a1a3a;color:#c084fc}
+.latency{color:#94a3b8;font-size:.85rem;font-family:monospace}
+.ann-list{display:flex;flex-direction:column;gap:10px}
+.ann{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px 20px}
+.ann-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.ann-date{color:#64748b;font-size:.8rem}
+.ann-type{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase}
+.ann-type-info{background:#1e3a5f;color:#60a5fa}
+.ann-type-success{background:#1a3a2a;color:#4ade80}
+.ann-type-warning{background:#422006;color:#fbbf24}
+.ann-type-alert{background:#450a0a;color:#f87171}
+.ann h4{color:#f8fafc;font-size:.95rem}
+.ann p{color:#94a3b8;font-size:.85rem;line-height:1.5}
+.arch{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;overflow-x:auto}
+.arch pre{color:#94a3b8;font-size:.75rem;line-height:1.6;font-family:'Fira Code',monospace;white-space:pre}
+.audit-table{width:100%;border-collapse:collapse;margin-top:12px}
+.audit-table th,.audit-table td{text-align:left;padding:10px 14px;border-bottom:1px solid #1f2937;font-size:.85rem}
+.audit-table th{color:#94a3b8;font-weight:600;background:#0f1629}
+.audit-table td{color:#e0e0e0}
+footer{text-align:center;padding:30px 20px;color:#4b5563;font-size:.8rem;border-top:1px solid #1f2937;margin-top:40px}
+@media(max-width:640px){.svc{grid-template-columns:1fr;gap:8px}.stats{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1>Orcest AI System Status</h1>
+<p>Real-time monitoring of all ecosystem services</p>
+</div>
+
+<div class="overall {{ overall_class }}">{{ overall_text }}</div>
+
+<div class="stats">
+<div class="stat"><div class="num">{{ operational }}</div><div class="label">Operational</div></div>
+<div class="stat"><div class="num">{{ total - operational }}</div><div class="label">Issues</div></div>
+<div class="stat"><div class="num">{{ total }}</div><div class="label">Total Services</div></div>
+<div class="stat"><div class="num" style="font-size:1rem">{{ checked_at }}</div><div class="label">Last Checked</div></div>
+</div>
+
+<div class="section">
+<h2>Service Status</h2>
+<div class="svc-grid">
+{% for svc in services %}
+<div class="svc">
+<div>
+<div class="svc-name">{{ svc.name }} <span class="svc-type type-{{ svc.type }}">{{ svc.type }}</span></div>
+<div class="svc-desc">{{ svc.description }}</div>
+</div>
+<div class="latency">{{ svc.latency_ms }}ms</div>
+<div><span class="badge badge-{{ svc.status }}">{{ svc.status }}</span></div>
+<div><a href="{{ svc.url }}" target="_blank" style="font-size:.8rem">Visit</a></div>
+</div>
+{% endfor %}
+</div>
+</div>
+
+<div class="section">
+<h2>Announcements & Alerts</h2>
+<div class="ann-list">
+{% for ann in announcements %}
+<div class="ann">
+<div class="ann-header">
+<span class="ann-type ann-type-{{ ann.type }}">{{ ann.type }}</span>
+<span class="ann-date">{{ ann.date }}</span>
+</div>
+<h4>{{ ann.title }}</h4>
+<p>{{ ann.body }}</p>
+</div>
+{% endfor %}
+</div>
+</div>
+
+<div class="section">
+<h2>Architecture Overview</h2>
+<div class="arch"><pre>
+                         +------------------+
+                         |    orcest.ai     |
+                         |  Landing + API   |
+                         +--------+---------+
+                                  |
+              +-------------------+-------------------+
+              |                   |                   |
+     +--------+--------+ +-------+-------+ +---------+---------+
+     |   login.orcest  | |  rm.orcest.ai | | status.orcest.ai  |
+     |    SSO/OIDC     | |  RainyModel   | |    Monitoring      |
+     +-----------------+ +-------+-------+ +-------------------+
+                                 |
+                    +------------+------------+
+                    |            |            |
+           +-------+---+ +-----+-----+ +----+------+
+           | HF/Free   | | Ollama    | | OpenRouter|
+           | (FREE)    | | (INTERNAL)| | (PREMIUM) |
+           +-----------+ +-----+-----+ +-----------+
+                               |
+                    +----------+----------+
+                    |                     |
+              +-----+------+       +-----+------+
+              | 16GB (14b) |       | 8GB (7b)   |
+              | Primary    |       | Secondary  |
+              +------------+       +------------+
+
+     +------------------+  +------------------+  +------------------+
+     |  llm.orcest.ai   |  | agent.orcest.ai  |  |  ide.orcest.ai   |
+     |     Lamino        |  |    Maestrist      |  |     Orcide        |
+     |  Chat + RAG       |  |  AI Dev Agent     |  |  AI Code Editor   |
+     +------------------+  +------------------+  +------------------+
+</pre></div>
+</div>
+
+<div class="section">
+<h2>Quality Audit Summary</h2>
+<table class="audit-table">
+<tr><th>Check</th><th>Status</th><th>Details</th></tr>
+<tr><td>TLS Certificates</td><td><span class="badge badge-operational">PASS</span></td><td>All domains have valid HTTPS certificates</td></tr>
+<tr><td>HTTP → HTTPS Redirect</td><td><span class="badge badge-operational">PASS</span></td><td>All services redirect HTTP to HTTPS</td></tr>
+<tr><td>Swagger/OpenAPI Exposure</td><td><span class="badge badge-degraded">PENDING</span></td><td>PRs submitted to disable on orcest.ai and rm.orcest.ai</td></tr>
+<tr><td>API Authentication</td><td><span class="badge badge-operational">PASS</span></td><td>RainyModel requires Bearer token, Lamino/Maestrist require session</td></tr>
+<tr><td>SSO Provider</td><td><span class="badge badge-operational">PASS</span></td><td>login.orcest.ai live with OIDC support</td></tr>
+<tr><td>Upstream Branding</td><td><span class="badge badge-operational">PASS</span></td><td>Zero trace rebranding completed across all repos</td></tr>
+<tr><td>Fork Detachment</td><td><span class="badge badge-degraded">PENDING</span></td><td>GitHub fork relationships need manual removal</td></tr>
+<tr><td>Email Isolation</td><td><span class="badge badge-operational">PASS</span></td><td>orcest.ai MX/SPF/DKIM/DMARC untouched</td></tr>
+<tr><td>Branch Protection</td><td><span class="badge badge-operational">PASS</span></td><td>CODEOWNERS and SECURITY.md added to all repos</td></tr>
+<tr><td>Dependency Scanning</td><td><span class="badge badge-operational">PASS</span></td><td>Dependabot configured for all repos</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>API Endpoints</h2>
+<table class="audit-table">
+<tr><th>Service</th><th>Endpoint</th><th>Auth</th><th>Description</th></tr>
+<tr><td>RainyModel</td><td><code>/v1/models</code></td><td>Bearer Key</td><td>List available model aliases</td></tr>
+<tr><td>RainyModel</td><td><code>/v1/chat/completions</code></td><td>Bearer Key</td><td>Chat completion with auto-routing</td></tr>
+<tr><td>RainyModel</td><td><code>/health</code></td><td>None</td><td>Health check</td></tr>
+<tr><td>Login SSO</td><td><code>/.well-known/openid-configuration</code></td><td>None</td><td>OIDC discovery</td></tr>
+<tr><td>Login SSO</td><td><code>/oauth2/authorize</code></td><td>Session</td><td>Authorization endpoint</td></tr>
+<tr><td>Login SSO</td><td><code>/oauth2/token</code></td><td>Client Secret</td><td>Token exchange</td></tr>
+<tr><td>Login SSO</td><td><code>/api/token/verify</code></td><td>Bearer Token</td><td>Token verification</td></tr>
+<tr><td>Status</td><td><code>/api/status</code></td><td>None</td><td>JSON status of all services</td></tr>
+<tr><td>Status</td><td><code>/api/announcements</code></td><td>None</td><td>System announcements</td></tr>
+</table>
+</div>
+
+</div>
+<footer>
+<p>Orcest AI Status Monitor &mdash; Auto-refreshes every 60 seconds</p>
+<p style="margin-top:8px"><a href="https://orcest.ai">orcest.ai</a> &middot; <a href="https://login.orcest.ai">Login</a> &middot; <a href="/api/status">API</a></p>
+</footer>
+</body>
+</html>

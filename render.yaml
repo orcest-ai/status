@@ -1,0 +1,14 @@
+services:
+  - type: web
+    runtime: docker
+    name: status-orcest-ai
+    plan: starter
+    repo: https://github.com/orcest-ai/status
+    branch: main
+    rootDir: /
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    numInstances: 1
+    domains:
+      - status.orcest.ai
+    healthCheckPath: /health
