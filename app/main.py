@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,6 +24,7 @@ templates = Jinja2Templates(directory="templates")
 
 CACHE_TTL = 30
 CHECK_TIMEOUT = 10.0
+HISTORY_LIMIT = 120
 
 SERVICES: list[dict[str, str]] = [
     {
@@ -299,6 +301,7 @@ ANNOUNCEMENTS = [
 ]
 
 _cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_service_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=HISTORY_LIMIT))
 
 
 async def check_service(service: dict[str, str], client: httpx.AsyncClient) -> dict[str, Any]:
@@ -365,6 +368,17 @@ async def check_all_services(force: bool = False) -> dict[str, Any]:
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "cache_ttl_seconds": CACHE_TTL,
     }
+
+    for result in results:
+        _service_history[result["name"]].append(
+            {
+                "status": result["status"],
+                "latency_ms": result["latency_ms"],
+                "code": result["code"],
+                "checked_at": result["checked_at"],
+            }
+        )
+
     _cache["data"] = payload
     _cache["ts"] = now
     return payload
@@ -476,4 +490,38 @@ async def api_status_stream():
             await asyncio.sleep(8)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/status/history")
+async def api_status_history(limit: int = 40):
+    safe_limit = max(1, min(limit, HISTORY_LIMIT))
+    return {
+        "limit": safe_limit,
+        "services": {
+            name: list(history)[-safe_limit:]
+            for name, history in _service_history.items()
+        },
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/status/node/{service_name}")
+async def api_status_node(service_name: str, limit: int = 40):
+    safe_limit = max(1, min(limit, HISTORY_LIMIT))
+    current = await check_all_services()
+    match = next((s for s in current["services"] if s["name"].lower() == service_name.lower()), None)
+    if match is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "service_not_found",
+                "service_name": service_name,
+                "available_services": [s["name"] for s in current["services"]],
+            },
+        )
+    return {
+        "service": match,
+        "history": list(_service_history[match["name"]])[-safe_limit:],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
 

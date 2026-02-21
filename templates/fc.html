@@ -31,6 +31,32 @@
     .legend { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; color: var(--muted); font-size: 12px; }
     .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
     .ok { background: var(--ok); } .warn { background: var(--warn); } .bad { background: var(--bad); }
+    .drawer {
+      position: fixed; top: 0; right: -420px; width: 420px; max-width: calc(100vw - 20px);
+      height: 100vh; background: #0b1220; border-left: 1px solid #1e293b; transition: right .2s ease;
+      z-index: 50; padding: 16px; box-sizing: border-box; overflow-y: auto;
+    }
+    .drawer.open { right: 0; }
+    .drawerHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .drawerTitle { font-size: 15px; font-weight: 600; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 8px; margin: 8px 0; font-size: 13px; }
+    .kv .k { color: var(--muted); }
+    .badge { display:inline-block; padding:3px 8px; border:1px solid #334155; border-radius:999px; font-size:12px; }
+    .drawer button, .drawer a {
+      border: 1px solid #334155; background: #111827; color: var(--txt); border-radius: 8px;
+      padding: 7px 10px; text-decoration: none; cursor: pointer; font-size: 12px;
+    }
+    .drawerActions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    #sparkline { width: 100%; height: 90px; border: 1px solid #1e293b; border-radius: 8px; background: #020617; }
+    .flow-edge path {
+      stroke-dasharray: 10 8;
+      animation: flowDash 1.6s linear infinite;
+      stroke-width: 2.2px;
+      stroke: #60a5fa;
+      opacity: 0.9;
+    }
+    @keyframes flowDash { to { stroke-dashoffset: -36; } }
     @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -82,9 +108,24 @@
     </div>
   </div>
 
+  <aside id="nodeDrawer" class="drawer" aria-hidden="true">
+    <div class="drawerHead">
+      <div>
+        <div id="drawerTitle" class="drawerTitle">Node details</div>
+        <div id="drawerSub" class="muted">Select a node in the graph</div>
+      </div>
+      <button id="closeDrawerBtn" type="button">Close</button>
+    </div>
+    <div id="drawerBody">
+      <div class="muted">No node selected.</div>
+    </div>
+  </aside>
+
   <script>
     const topology = {{ view_data | tojson }};
     const currentView = {{ current_view | tojson }};
+    let latestStatus = null;
+    let activeNodeContext = null;
 
     function normalizeLabel(v) {
       return String(v || '').replace(/\s+/g, ' ').trim();
@@ -156,10 +197,13 @@
       svg.querySelectorAll('g.node').forEach((node) => {
         const label = nodeLabel(node);
         const matched = linkEntries.find(([k]) => label.includes(k));
-        if (!matched) return;
-        const target = matched[1];
+        const target = matched ? matched[1] : null;
         node.style.cursor = 'pointer';
         node.addEventListener('click', () => {
+          openNodeDrawer({ label, target });
+        });
+        node.addEventListener('dblclick', () => {
+          if (!target) return;
           if (target.startsWith('/')) window.location.href = target;
           else window.open(target, '_blank', 'noopener');
         });
@@ -176,21 +220,22 @@
     function applyRealtimeNodeStatus(svg, statusData) {
       const serviceMap = topology.service_map || {};
       const byName = {};
-      (statusData.services || []).forEach((s) => { byName[s.name] = s.status; });
+      (statusData.services || []).forEach((s) => { byName[s.name] = s; });
 
       svg.querySelectorAll('g.node').forEach((node) => {
         const label = nodeLabel(node);
         const mapped = Object.entries(serviceMap).find(([k]) => label.includes(normalizeLabel(k)));
         if (!mapped) return;
         const svcName = mapped[1];
-        const svcStatus = byName[svcName];
-        if (!svcStatus) return;
+        const svcData = byName[svcName];
+        if (!svcData) return;
         const shape = findNodeShape(node);
         if (!shape) return;
-        const color = colorForStatus(svcStatus);
+        const color = colorForStatus(svcData.status);
         shape.style.fill = color.fill;
         shape.style.stroke = color.stroke;
         shape.style.strokeWidth = '2px';
+        node.dataset.serviceName = svcName;
       });
     }
 
@@ -198,22 +243,143 @@
       try {
         const r = await fetch('/api/status?force=true');
         const d = await r.json();
+        latestStatus = d;
         document.getElementById('snapshot').textContent = JSON.stringify({
           overall: d.overall,
           summary: d.summary,
           checked_at: d.checked_at
         }, null, 2);
         if (svg) applyRealtimeNodeStatus(svg, d);
+        if (activeNodeContext) refreshActiveNodeInDrawer();
       } catch (e) {
         document.getElementById('snapshot').textContent = 'Failed: ' + e.message;
       }
+    }
+
+    function formatMs(v) {
+      if (v == null) return '-';
+      return `${Number(v).toFixed(2)} ms`;
+    }
+
+    function statusBadge(status) {
+      const c = colorForStatus(status || 'unknown');
+      return `<span class="badge" style="border-color:${c.stroke}; color:${c.stroke};">${status || 'unknown'}</span>`;
+    }
+
+    function renderSparkline(points) {
+      const values = points.map((p) => Number(p.latency_ms || 0));
+      if (!values.length) return '<div class="muted">No latency history yet.</div>';
+      const w = 360;
+      const h = 90;
+      const max = Math.max(...values, 1);
+      const min = Math.min(...values, 0);
+      const range = Math.max(max - min, 1);
+      const step = values.length > 1 ? (w - 12) / (values.length - 1) : 0;
+      const coords = values.map((v, i) => {
+        const x = 6 + i * step;
+        const y = h - 8 - ((v - min) / range) * (h - 16);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      return `
+        <svg id="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+          <polyline fill="none" stroke="#334155" stroke-width="1" points="6,${h - 8} ${w - 6},${h - 8}"></polyline>
+          <polyline fill="none" stroke="#60a5fa" stroke-width="2" points="${coords}"></polyline>
+        </svg>
+        <div class="muted" style="margin-top:6px;">min ${formatMs(min)} / max ${formatMs(max)} / latest ${formatMs(values[values.length - 1])}</div>
+      `;
+    }
+
+    async function fetchNodeDetail(serviceName) {
+      const url = `/api/status/node/${encodeURIComponent(serviceName)}?limit=50`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`Node detail failed (${r.status})`);
+      return r.json();
+    }
+
+    function closeNodeDrawer() {
+      const drawer = document.getElementById('nodeDrawer');
+      drawer.classList.remove('open');
+      drawer.setAttribute('aria-hidden', 'true');
+      activeNodeContext = null;
+    }
+
+    function findServiceNameByLabel(label) {
+      const serviceMap = topology.service_map || {};
+      const entry = Object.entries(serviceMap).find(([k]) => normalizeLabel(label).includes(normalizeLabel(k)));
+      return entry ? entry[1] : null;
+    }
+
+    async function openNodeDrawer(ctx) {
+      const drawer = document.getElementById('nodeDrawer');
+      drawer.classList.add('open');
+      drawer.setAttribute('aria-hidden', 'false');
+      activeNodeContext = ctx;
+      document.getElementById('drawerTitle').textContent = normalizeLabel(ctx.label) || 'Node details';
+      document.getElementById('drawerSub').textContent = 'Loading realtime node telemetry...';
+      document.getElementById('drawerBody').innerHTML = '<div class="muted">Loading...</div>';
+      await refreshActiveNodeInDrawer();
+    }
+
+    async function refreshActiveNodeInDrawer() {
+      if (!activeNodeContext) return;
+      const label = normalizeLabel(activeNodeContext.label);
+      const serviceName = findServiceNameByLabel(label);
+      const drawerSub = document.getElementById('drawerSub');
+      const drawerBody = document.getElementById('drawerBody');
+      try {
+        if (!serviceName) {
+          drawerSub.textContent = 'No mapped service for this node.';
+          drawerBody.innerHTML = `
+            <div class="kv">
+              <div class="k">Label</div><div>${label || '-'}</div>
+              <div class="k">View</div><div>${currentView}</div>
+            </div>
+            <div class="muted">Tip: service_map this view does not include this node.</div>
+          `;
+          return;
+        }
+        const data = await fetchNodeDetail(serviceName);
+        const svc = data.service || {};
+        const history = data.history || [];
+        drawerSub.textContent = `service: ${serviceName} • updated ${svc.checked_at || data.updated_at || '-'}`;
+        drawerBody.innerHTML = `
+          <div class="kv">
+            <div class="k">Status</div><div>${statusBadge(svc.status)}</div>
+            <div class="k">Latency</div><div>${formatMs(svc.latency_ms)}</div>
+            <div class="k">HTTP</div><div>${svc.code == null ? '-' : svc.code}</div>
+            <div class="k">Endpoint</div><div style="word-break:break-word;">${svc.url || '-'}</div>
+          </div>
+          <strong style="font-size:13px;">Latency history (latest 50 checks)</strong>
+          <div style="margin-top:8px;">${renderSparkline(history)}</div>
+          <div class="drawerActions">
+            ${activeNodeContext.target ? `<a href="${activeNodeContext.target}" ${activeNodeContext.target.startsWith('/') ? '' : 'target="_blank" rel="noopener"'}>Open linked topology</a>` : ''}
+            ${svc.url ? `<a href="${svc.url}" target="_blank" rel="noopener">Open health URL</a>` : ''}
+          </div>
+        `;
+      } catch (e) {
+        drawerSub.textContent = serviceName ? `service: ${serviceName}` : 'service mapping failed';
+        drawerBody.innerHTML = `<div class="muted">Failed to load node detail: ${e.message}</div>`;
+      }
+    }
+
+    function applyFlowAnimation(svg) {
+      if (!svg) return;
+      const paths = svg.querySelectorAll('g.edgePath path.path');
+      paths.forEach((p, idx) => {
+        const parent = p.closest('g.edgePath');
+        if (!parent) return;
+        parent.classList.add('flow-edge');
+        p.style.animationDelay = `${(idx % 8) * 0.08}s`;
+      });
     }
 
     window.addEventListener('load', () => {
       setTimeout(() => {
         const svg = document.querySelector('.mermaid svg');
         setupPanZoomAndExports(svg);
+        applyFlowAnimation(svg);
         if (svg) applyNodeLinks(svg);
+        document.getElementById('closeDrawerBtn').addEventListener('click', closeNodeDrawer);
         refreshSnapshotAndStatus(svg);
         setInterval(() => refreshSnapshotAndStatus(svg), 10000);
       }, 350);
