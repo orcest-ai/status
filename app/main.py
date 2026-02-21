@@ -1,6 +1,7 @@
 import asyncio
 import time
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -12,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 app = FastAPI(
     title="Orcest Status",
     description="Orcest AI Ecosystem Status & Monitoring Dashboard",
-    version="1.1.0",
+    version="2.0.0",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -80,6 +81,20 @@ SERVICES: list[dict[str, str]] = [
         "health": "http://10.0.0.8:11434/api/tags",
         "type": "internal",
         "description": "8GB - qwen2.5:7b fallback",
+    },
+    {
+        "name": "OllamaFreeAPI",
+        "url": "https://ollamafreeapi.orcest.ai",
+        "health": "https://ollamafreeapi.orcest.ai/health",
+        "type": "api",
+        "description": "Free Ollama API proxy",
+    },
+    {
+        "name": "RainyModel Providers",
+        "url": "https://rm.orcest.ai",
+        "health": "https://rm.orcest.ai/v1/providers",
+        "type": "api",
+        "description": "LLM provider auto-discovery",
     },
 ]
 
@@ -300,6 +315,47 @@ ANNOUNCEMENTS = [
 
 _cache: dict[str, Any] = {"data": None, "ts": 0.0}
 
+# --- In-memory metrics history (last 60 minutes) ---
+_metrics_history: dict[str, deque] = {}
+MAX_HISTORY_MINUTES = 60
+
+# Track the last known status for each service (for incident detection)
+_last_known_status: dict[str, str] = {}
+
+# Incident log (most recent 100 incidents)
+_incidents: deque = deque(maxlen=100)
+
+
+def _record_metric(service_name: str, status: str, latency_ms: float):
+    """Record a check result into the per-service metrics history."""
+    if service_name not in _metrics_history:
+        _metrics_history[service_name] = deque(maxlen=MAX_HISTORY_MINUTES * 2)  # ~2 checks per minute with 30s cache
+    _metrics_history[service_name].append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "status": status,
+        "latency_ms": latency_ms,
+    })
+
+
+def _check_for_incident(service_name: str, old_status: str, new_status: str):
+    """Detect service transitions and log incidents."""
+    if old_status == "operational" and new_status != "operational":
+        _incidents.append({
+            "service": service_name,
+            "type": "down",
+            "old_status": old_status,
+            "new_status": new_status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "resolved": False,
+        })
+    elif old_status != "operational" and new_status == "operational":
+        # Find the matching incident and resolve it
+        for incident in reversed(_incidents):
+            if incident["service"] == service_name and not incident["resolved"]:
+                incident["resolved"] = True
+                incident["resolved_at"] = datetime.utcnow().isoformat()
+                break
+
 
 async def check_service(service: dict[str, str], client: httpx.AsyncClient) -> dict[str, Any]:
     started = time.perf_counter()
@@ -310,7 +366,7 @@ async def check_service(service: dict[str, str], client: httpx.AsyncClient) -> d
             status = "operational"
         else:
             status = "degraded"
-        return {
+        result = {
             **service,
             "status": status,
             "code": resp.status_code,
@@ -319,7 +375,7 @@ async def check_service(service: dict[str, str], client: httpx.AsyncClient) -> d
         }
     except httpx.TimeoutException:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        return {
+        result = {
             **service,
             "status": "timeout",
             "code": 0,
@@ -328,13 +384,22 @@ async def check_service(service: dict[str, str], client: httpx.AsyncClient) -> d
         }
     except Exception:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        return {
+        result = {
             **service,
             "status": "down",
             "code": 0,
             "latency_ms": latency_ms,
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    # Record metrics and detect incidents
+    svc_name = service["name"]
+    _record_metric(svc_name, result["status"], result["latency_ms"])
+    old_status = _last_known_status.get(svc_name, result["status"])
+    _check_for_incident(svc_name, old_status, result["status"])
+    _last_known_status[svc_name] = result["status"]
+
+    return result
 
 
 async def check_all_services(force: bool = False) -> dict[str, Any]:
@@ -423,7 +488,7 @@ async def flowchart_view_page(request: Request, view_key: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "1.1.0"}
+    return {"status": "healthy", "version": "2.0.0"}
 
 
 @app.get("/api/status")
@@ -465,6 +530,34 @@ async def api_topology_view(view_key: str):
         "service_map": view.get("service_map", {}),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    """Return performance metrics for all monitored services."""
+    now = datetime.utcnow()
+    cutoff = now - timedelta(minutes=MAX_HISTORY_MINUTES)
+    metrics = {}
+    for service_name, history in _metrics_history.items():
+        recent = [m for m in history if m["timestamp"] > cutoff.isoformat()]
+        if not recent:
+            continue
+        total_checks = len(recent)
+        operational_checks = sum(1 for m in recent if m["status"] == "operational")
+        avg_latency = sum(m["latency_ms"] for m in recent) / total_checks if total_checks > 0 else 0
+        metrics[service_name] = {
+            "total_checks": total_checks,
+            "uptime_pct": round((operational_checks / total_checks) * 100, 2) if total_checks > 0 else 0,
+            "avg_latency_ms": round(avg_latency, 1),
+            "last_check": recent[-1] if recent else None,
+        }
+    return {"metrics": metrics, "window_minutes": MAX_HISTORY_MINUTES}
+
+
+@app.get("/api/incidents")
+async def get_incidents():
+    """Return the incident log (most recent 100 state transitions)."""
+    return {"incidents": list(_incidents)}
 
 
 @app.get("/api/status/stream")

@@ -1,12 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Orcest Status Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-    :root {
+    /* --- Dark theme (default) --- */
+    :root, [data-theme="dark"] {
       --bg: #0a0a0f;
       --panel: #111827;
       --line: #1f2937;
@@ -16,24 +17,45 @@
       --warn: #f59e0b;
       --bad: #ef4444;
       --link: #60a5fa;
+      --chart-text: #e2e8f0;
+      --uptime-bar-bg: #1f2937;
+      --incident-resolved-bg: #0b3a21;
+      --incident-active-bg: #3f1212;
+    }
+    /* --- Light theme --- */
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --line: #e2e8f0;
+      --text: #1e293b;
+      --muted: #64748b;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --bad: #dc2626;
+      --link: #2563eb;
+      --chart-text: #1e293b;
+      --uptime-bar-bg: #e2e8f0;
+      --incident-resolved-bg: #dcfce7;
+      --incident-active-bg: #fee2e2;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); transition: background .3s, color .3s; }
     .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
     h1 { margin: 0 0 6px 0; }
     .sub { margin: 0 0 18px; color: var(--muted); }
-    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
     .toolbar a, .toolbar button {
       color: var(--text); border: 1px solid var(--line); background: var(--panel);
       text-decoration: none; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+      font-size: 14px; transition: border-color .2s, color .2s, background .2s;
     }
     .toolbar a:hover, .toolbar button:hover { border-color: var(--link); color: var(--link); }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; margin-bottom: 16px; }
-    .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; transition: background .3s, border-color .3s; }
     .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
     .kpi .value { font-size: 24px; font-weight: 700; margin-top: 6px; }
     .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; transition: background .3s, border-color .3s; }
     .card h3 { margin: 0 0 10px; }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
@@ -46,6 +68,37 @@
     .ann .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
     .footer { margin-top: 16px; color: var(--muted); font-size: 13px; }
     @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+
+    /* --- Metrics uptime bars --- */
+    .metrics-section { margin-top: 14px; }
+    .uptime-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .uptime-row:last-child { border-bottom: none; }
+    .uptime-name { min-width: 180px; font-weight: 600; font-size: 14px; }
+    .uptime-bar-wrap { flex: 1; background: var(--uptime-bar-bg); border-radius: 6px; height: 22px; overflow: hidden; position: relative; }
+    .uptime-bar { height: 100%; border-radius: 6px; transition: width .5s ease; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; }
+    .uptime-bar span { font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+    .uptime-stats { min-width: 160px; font-size: 12px; color: var(--muted); text-align: right; }
+    .uptime-bar.bar-ok { background: var(--ok); }
+    .uptime-bar.bar-warn { background: var(--warn); }
+    .uptime-bar.bar-bad { background: var(--bad); }
+
+    /* --- Incidents timeline --- */
+    .incidents-section { margin-top: 14px; }
+    .incident-item { border-radius: 10px; padding: 12px; margin-bottom: 8px; border: 1px solid var(--line); }
+    .incident-item.resolved { background: var(--incident-resolved-bg); }
+    .incident-item.active { background: var(--incident-active-bg); }
+    .incident-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .incident-service { font-weight: 700; font-size: 14px; }
+    .incident-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
+    .incident-badge.badge-resolved { background: var(--ok); color: #fff; }
+    .incident-badge.badge-active { background: var(--bad); color: #fff; }
+    .incident-details { font-size: 12px; color: var(--muted); }
+
+    /* --- Theme toggle --- */
+    .theme-toggle {
+      position: relative; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .theme-toggle-label { font-size: 12px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -56,7 +109,10 @@
     <div class="toolbar">
       <a href="/fc">Interactive Diagram</a>
       <a href="/api/status?force=true" target="_blank">Raw JSON</a>
+      <a href="/api/metrics" target="_blank">Metrics API</a>
+      <a href="/api/incidents" target="_blank">Incidents API</a>
       <button id="toggleRealtime">Pause Realtime</button>
+      <button id="themeToggle">Switch to Light</button>
       <span id="updatedAt" style="color:var(--muted);padding:8px 0;"></span>
     </div>
 
@@ -92,13 +148,23 @@
       </div>
     </div>
 
+    <!-- Metrics: Uptime percentages per service -->
+    <div class="metrics-section">
+      <div class="card">
+        <h3>Service Uptime Metrics <span id="metricsWindow" style="font-weight:400;font-size:13px;color:var(--muted);">(last 60 min)</span></h3>
+        <div id="metricsContent">
+          <p style="color:var(--muted);font-size:14px;">Loading metrics...</p>
+        </div>
+      </div>
+    </div>
+
     <div class="grid" style="margin-top:14px;">
       <div class="card">
         <h3>Announcements</h3>
         <div id="announcements">
           {% for ann in announcements %}
           <div class="ann">
-            <div class="meta">{{ ann.date }} · {{ ann.type }}</div>
+            <div class="meta">{{ ann.date }} &middot; {{ ann.type }}</div>
             <strong>{{ ann.title }}</strong>
             <div>{{ ann.body }}</div>
           </div>
@@ -111,30 +177,87 @@
       </div>
     </div>
 
-    <div class="footer">Auto-updates every 8s via SSE. Fallback polling every 15s if stream fails.</div>
+    <!-- Incidents Timeline -->
+    <div class="incidents-section">
+      <div class="card">
+        <h3>Incident Timeline</h3>
+        <div id="incidentsContent">
+          <p style="color:var(--muted);font-size:14px;">Loading incidents...</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">Auto-updates every 8s via SSE. Metrics and incidents refresh every 30s. Fallback polling every 15s if stream fails.</div>
   </div>
 
   <script>
+    /* ---- Theme toggle ---- */
+    (function() {
+      const stored = localStorage.getItem('orcest-theme');
+      if (stored) document.documentElement.setAttribute('data-theme', stored);
+    })();
+
+    document.getElementById('themeToggle').addEventListener('click', function() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      localStorage.setItem('orcest-theme', next);
+      this.textContent = next === 'dark' ? 'Switch to Light' : 'Switch to Dark';
+      updateChartColors();
+    });
+
+    // Update button text on load
+    (function() {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      document.getElementById('themeToggle').textContent = current === 'dark' ? 'Switch to Light' : 'Switch to Dark';
+    })();
+
+    /* ---- Realtime toggle ---- */
     let realtime = true;
     const labels = [];
     const latData = [];
 
+    /* ---- Charts ---- */
+    function getChartTextColor() {
+      return getComputedStyle(document.documentElement).getPropertyValue('--chart-text').trim() || '#e2e8f0';
+    }
+
     const latencyChart = new Chart(document.getElementById('latencyChart'), {
       type: 'line',
       data: { labels, datasets: [{ label: 'Avg Latency (ms)', data: latData, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.15)', tension: .3, fill: true }] },
-      options: { animation: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { labels: { color: '#e2e8f0' }}}}
+      options: { animation: false, scales: { y: { beginAtZero: true, ticks: { color: getChartTextColor() } }, x: { ticks: { color: getChartTextColor() } } }, plugins: { legend: { labels: { color: getChartTextColor() }}}}
     });
 
     const distributionChart = new Chart(document.getElementById('distributionChart'), {
       type: 'doughnut',
       data: { labels: ['Operational', 'Degraded', 'Down'], datasets: [{ data: [0,0,0], backgroundColor: ['#22c55e','#f59e0b','#ef4444'] }] },
-      options: { animation: false, plugins: { legend: { labels: { color: '#e2e8f0' }}}}
+      options: { animation: false, plugins: { legend: { labels: { color: getChartTextColor() }}}}
     });
 
+    function updateChartColors() {
+      const c = getChartTextColor();
+      latencyChart.options.scales.y.ticks.color = c;
+      latencyChart.options.scales.x.ticks.color = c;
+      latencyChart.options.plugins.legend.labels.color = c;
+      latencyChart.update();
+      distributionChart.options.plugins.legend.labels.color = c;
+      distributionChart.update();
+    }
+
+    /* ---- Helpers ---- */
     function fmtTime(iso) {
       try { return new Date(iso).toLocaleTimeString(); } catch (_) { return iso; }
     }
 
+    function fmtDateTime(iso) {
+      try {
+        const d = new Date(iso);
+        return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+      } catch (_) { return iso; }
+    }
+
+    /* ---- Status UI update ---- */
     function updateUI(data) {
       document.getElementById('overall').textContent = data.overall;
       document.getElementById('overall').className = 'value status ' + data.overall;
@@ -164,6 +287,97 @@
       distributionChart.update();
     }
 
+    /* ---- Metrics rendering ---- */
+    function renderMetrics(metricsData) {
+      const container = document.getElementById('metricsContent');
+      const metrics = metricsData.metrics || {};
+      const window_min = metricsData.window_minutes || 60;
+      document.getElementById('metricsWindow').textContent = '(last ' + window_min + ' min)';
+
+      const names = Object.keys(metrics);
+      if (names.length === 0) {
+        container.innerHTML = '<p style="color:var(--muted);font-size:14px;">No metrics data yet. Metrics populate after the first health check cycle.</p>';
+        return;
+      }
+
+      let html = '';
+      names.forEach(function(name) {
+        const m = metrics[name];
+        const pct = m.uptime_pct;
+        let barClass = 'bar-ok';
+        if (pct < 99) barClass = 'bar-warn';
+        if (pct < 90) barClass = 'bar-bad';
+        html += `
+          <div class="uptime-row">
+            <div class="uptime-name">${name}</div>
+            <div class="uptime-bar-wrap">
+              <div class="uptime-bar ${barClass}" style="width:${pct}%">
+                <span>${pct}%</span>
+              </div>
+            </div>
+            <div class="uptime-stats">
+              ${m.avg_latency_ms} ms avg &middot; ${m.total_checks} checks
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    /* ---- Incidents rendering ---- */
+    function renderIncidents(incidentData) {
+      const container = document.getElementById('incidentsContent');
+      const incidents = incidentData.incidents || [];
+
+      if (incidents.length === 0) {
+        container.innerHTML = '<p style="color:var(--muted);font-size:14px;">No incidents recorded. All services have been stable.</p>';
+        return;
+      }
+
+      // Show newest first
+      const sorted = incidents.slice().reverse();
+      let html = '';
+      sorted.forEach(function(inc) {
+        const resolved = inc.resolved;
+        const itemClass = resolved ? 'resolved' : 'active';
+        const badgeClass = resolved ? 'badge-resolved' : 'badge-active';
+        const badgeText = resolved ? 'Resolved' : 'Active';
+        const resolvedAt = resolved && inc.resolved_at ? ' | Resolved: ' + fmtDateTime(inc.resolved_at) : '';
+        html += `
+          <div class="incident-item ${itemClass}">
+            <div class="incident-header">
+              <span class="incident-service">${inc.service}</span>
+              <span class="incident-badge ${badgeClass}">${badgeText}</span>
+            </div>
+            <div class="incident-details">
+              ${inc.old_status} &rarr; ${inc.new_status} | ${fmtDateTime(inc.timestamp)}${resolvedAt}
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    /* ---- Fetch metrics and incidents ---- */
+    async function fetchMetrics() {
+      try {
+        const r = await fetch('/api/metrics');
+        if (!r.ok) return;
+        const data = await r.json();
+        renderMetrics(data);
+      } catch (_) {}
+    }
+
+    async function fetchIncidents() {
+      try {
+        const r = await fetch('/api/incidents');
+        if (!r.ok) return;
+        const data = await r.json();
+        renderIncidents(data);
+      } catch (_) {}
+    }
+
+    /* ---- Polling and SSE ---- */
     async function pollStatus() {
       if (!realtime) return;
       try {
@@ -191,8 +405,14 @@
       this.textContent = realtime ? 'Pause Realtime' : 'Resume Realtime';
     });
 
+    /* ---- Initialize ---- */
     startStream();
+
+    // Fetch metrics and incidents immediately, then every 30 seconds
+    fetchMetrics();
+    fetchIncidents();
+    setInterval(fetchMetrics, 30000);
+    setInterval(fetchIncidents, 30000);
   </script>
 </body>
 </html>
-
