@@ -83,6 +83,206 @@ SERVICES: list[dict[str, str]] = [
     },
 ]
 
+TOPOLOGY_VIEWS: dict[str, dict[str, Any]] = {
+    "overview": {
+        "title": "Orcest Ecosystem Topology",
+        "subtitle": "High-level architecture of status, core services, SSO, RainyModel, and internal inference nodes.",
+        "mermaid": """
+flowchart TD
+  usersNode["Users"]
+  statusNode["status.orcest.ai"]
+  coreNode["orcest.ai Core"]
+  rmNode["RainyModel"]
+  laminoNode["Lamino"]
+  maestristNode["Maestrist"]
+  orcideNode["Orcide"]
+  ssoNode["Login SSO"]
+  ollamaPrimaryNode["Ollama Primary"]
+  ollamaSecondaryNode["Ollama Secondary"]
+
+  usersNode --> statusNode
+  statusNode --> coreNode
+  statusNode --> rmNode
+  statusNode --> laminoNode
+  statusNode --> maestristNode
+  statusNode --> orcideNode
+  statusNode --> ssoNode
+  rmNode --> ollamaPrimaryNode
+  rmNode --> ollamaSecondaryNode
+""",
+        "node_links": {
+            "RainyModel": "/fc/rainymodel",
+            "Lamino": "/fc/lamino",
+            "orcest.ai Core": "/fc/langchain-loop",
+        },
+        "service_map": {
+            "status.orcest.ai": "status.orcest.ai",
+            "orcest.ai Core": "Orcest AI",
+            "RainyModel": "RainyModel",
+            "Lamino": "Lamino",
+            "Maestrist": "Maestrist",
+            "Orcide": "Orcide",
+            "Login SSO": "Login SSO",
+            "Ollama Primary": "Ollama Primary",
+            "Ollama Secondary": "Ollama Secondary",
+        },
+    },
+    "rainymodel": {
+        "title": "RainyModel Routing Topology",
+        "subtitle": "Tiered routing: free native models, internal inference, and external providers via OpenRouter/direct endpoints.",
+        "mermaid": """
+flowchart LR
+  callerNode["Orcest/Lamino/Agents"]
+  rmNode["RainyModel Router"]
+  policyNode["Policy Engine"]
+  freeNode["Native Free Models"]
+  internalNode["Internal Model Servers"]
+  externalNode["External Providers"]
+  openRouterNode["OpenRouter Endpoint"]
+  directOpenAINode["Direct OpenAI Endpoint"]
+  directXaiNode["Direct xAI Endpoint"]
+  directAnthropicNode["Direct Anthropic Endpoint"]
+  directDeepSeekNode["Direct DeepSeek Endpoint"]
+  directGeminiNode["Direct Gemini Endpoint"]
+
+  callerNode --> rmNode
+  rmNode --> policyNode
+  policyNode --> freeNode
+  policyNode --> internalNode
+  policyNode --> externalNode
+
+  externalNode --> openRouterNode
+  externalNode --> directOpenAINode
+  externalNode --> directXaiNode
+  externalNode --> directAnthropicNode
+  externalNode --> directDeepSeekNode
+  externalNode --> directGeminiNode
+""",
+        "node_links": {
+            "External Providers": "/fc/providers",
+            "OpenRouter Endpoint": "/fc/providers",
+            "Direct OpenAI Endpoint": "/fc/providers",
+            "Direct xAI Endpoint": "/fc/providers",
+        },
+        "service_map": {
+            "RainyModel Router": "RainyModel",
+        },
+    },
+    "lamino": {
+        "title": "Lamino Inference Path",
+        "subtitle": "How Lamino request flow reaches OpenAI/Codex Max through RainyModel policy and endpoint routing.",
+        "mermaid": """
+flowchart TD
+  userNode["Lamino User Prompt"]
+  laminoNode["Lamino App"]
+  rmNode["RainyModel"]
+  policyNode["Routing Policy"]
+  openAINode["OpenAI Endpoint"]
+  codexNode["Codex Max Model"]
+  responseNode["Response Back to Lamino"]
+
+  userNode --> laminoNode
+  laminoNode --> rmNode
+  rmNode --> policyNode
+  policyNode --> openAINode
+  openAINode --> codexNode
+  codexNode --> responseNode
+  responseNode --> laminoNode
+""",
+        "node_links": {
+            "RainyModel": "/fc/rainymodel",
+            "OpenAI Endpoint": "/fc/providers",
+            "Codex Max Model": "/fc/providers",
+        },
+        "service_map": {
+            "Lamino App": "Lamino",
+            "RainyModel": "RainyModel",
+        },
+    },
+    "langchain-loop": {
+        "title": "Orcest LangChain Feedback Loop",
+        "subtitle": "How Orcest internal LangChain calls RainyModel and RainyModel can route back to Orcest LangChain API.",
+        "mermaid": """
+flowchart TD
+  orchNode["Orcest Core"]
+  lcNode["Internal LangChain API"]
+  toolsNode["Tools/Agents/Chains"]
+  rmNode["RainyModel"]
+  providersNode["Provider Mesh"]
+  callbackNode["Orcest LangChain Endpoint"]
+
+  orchNode --> lcNode
+  lcNode --> toolsNode
+  toolsNode --> rmNode
+  rmNode --> providersNode
+  rmNode --> callbackNode
+  callbackNode --> lcNode
+""",
+        "node_links": {
+            "RainyModel": "/fc/rainymodel",
+            "Provider Mesh": "/fc/providers",
+            "Internal LangChain API": "/fc/overview",
+        },
+        "service_map": {
+            "Orcest Core": "Orcest AI",
+            "RainyModel": "RainyModel",
+        },
+    },
+    "providers": {
+        "title": "Provider and Endpoint Topology",
+        "subtitle": "Detailed endpoint matrix: free native, internal servers, OpenRouter and direct provider endpoints.",
+        "mermaid": """
+flowchart TB
+  rmNode["RainyModel"]
+  nativeNode["Native Free"]
+  internalNode["Internal Servers"]
+  externalNode["External Providers"]
+
+  openRouterNode["OpenRouter API"]
+  openAINode["OpenAI API"]
+  xaiNode["xAI API"]
+  anthropicNode["Anthropic API"]
+  deepSeekNode["DeepSeek API"]
+  geminiNode["Gemini API"]
+
+  nativeModel1["qwen2.5:7b"]
+  nativeModel2["qwen2.5:14b"]
+  internalModel1["Internal GPU Pool A"]
+  internalModel2["Internal GPU Pool B"]
+
+  rmNode --> nativeNode
+  rmNode --> internalNode
+  rmNode --> externalNode
+
+  nativeNode --> nativeModel1
+  nativeNode --> nativeModel2
+  internalNode --> internalModel1
+  internalNode --> internalModel2
+
+  externalNode --> openRouterNode
+  externalNode --> openAINode
+  externalNode --> xaiNode
+  externalNode --> anthropicNode
+  externalNode --> deepSeekNode
+  externalNode --> geminiNode
+""",
+        "node_links": {
+            "RainyModel": "/fc/rainymodel",
+            "OpenRouter API": "https://openrouter.ai",
+            "OpenAI API": "https://platform.openai.com",
+            "xAI API": "https://x.ai",
+            "Anthropic API": "https://console.anthropic.com",
+            "DeepSeek API": "https://platform.deepseek.com",
+            "Gemini API": "https://aistudio.google.com",
+        },
+        "service_map": {
+            "RainyModel": "RainyModel",
+            "Internal GPU Pool A": "Ollama Primary",
+            "Internal GPU Pool B": "Ollama Secondary",
+        },
+    },
+}
+
 ANNOUNCEMENTS = [
     {
         "date": "2026-02-21",
@@ -185,7 +385,40 @@ async def status_dashboard(request: Request):
 
 @app.get("/fc", response_class=HTMLResponse)
 async def flowchart_page(request: Request):
-    return templates.TemplateResponse("fc.html", {"request": request})
+    return templates.TemplateResponse(
+        "fc.html",
+        {
+            "request": request,
+            "current_view": "overview",
+            "view_data": TOPOLOGY_VIEWS["overview"],
+            "views": [{"key": key, "title": value["title"]} for key, value in TOPOLOGY_VIEWS.items()],
+        },
+    )
+
+
+@app.get("/fc/{view_key}", response_class=HTMLResponse)
+async def flowchart_view_page(request: Request, view_key: str):
+    view = TOPOLOGY_VIEWS.get(view_key)
+    if view is None:
+        return templates.TemplateResponse(
+            "fc.html",
+            {
+                "request": request,
+                "current_view": "overview",
+                "view_data": TOPOLOGY_VIEWS["overview"],
+                "views": [{"key": key, "title": value["title"]} for key, value in TOPOLOGY_VIEWS.items()],
+                "error_message": f"Unknown topology '{view_key}', showing overview.",
+            },
+        )
+    return templates.TemplateResponse(
+        "fc.html",
+        {
+            "request": request,
+            "current_view": view_key,
+            "view_data": view,
+            "views": [{"key": key, "title": value["title"]} for key, value in TOPOLOGY_VIEWS.items()],
+        },
+    )
 
 
 @app.get("/health")
@@ -206,9 +439,31 @@ async def api_announcements():
 @app.get("/api/topology")
 async def api_topology():
     return {
-        "nodes": [svc["name"] for svc in SERVICES],
+        "views": [{"key": key, "title": value["title"], "subtitle": value["subtitle"]} for key, value in TOPOLOGY_VIEWS.items()],
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "diagram_url": "https://status.orcest.ai/fc",
+    }
+
+
+@app.get("/api/topology/{view_key}")
+async def api_topology_view(view_key: str):
+    view = TOPOLOGY_VIEWS.get(view_key)
+    if view is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "view_not_found",
+                "view_key": view_key,
+                "available_views": list(TOPOLOGY_VIEWS.keys()),
+            },
+        )
+    return {
+        "view_key": view_key,
+        "title": view["title"],
+        "subtitle": view["subtitle"],
+        "node_links": view["node_links"],
+        "service_map": view.get("service_map", {}),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
