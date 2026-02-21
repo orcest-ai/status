@@ -41,10 +41,10 @@ SERVICES: list[dict[str, str]] = [
     },
     {
         "name": "Lamino",
-        "url": "https://llm.orcest.ai",
-        "health": "https://llm.orcest.ai/api/health",
+        "url": "https://orcest.ai/lamino",
+        "health": "https://orcest.ai/lamino/api/health",
         "type": "web",
-        "description": "AI chat + workspace",
+        "description": "AI chat + SSO workspaces + decision chain",
     },
     {
         "name": "Maestrist",
