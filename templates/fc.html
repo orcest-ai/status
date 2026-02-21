@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Orcest Status Topology</title>
+  <script src="https://cdn.jsdelivr.net/npm/@panzoom/panzoom@4.6.0/dist/panzoom.min.js"></script>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'loose' });
+  </script>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e2e8f0; font-family: Inter, system-ui, sans-serif; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    .toolbar button, .toolbar a {
+      border: 1px solid #334155; background: #111827; color: #e2e8f0;
+      border-radius: 8px; padding: 8px 12px; text-decoration: none; cursor: pointer;
+    }
+    .toolbar button:hover, .toolbar a:hover { border-color: #60a5fa; color: #60a5fa; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; }
+    #diagramHost { min-height: 420px; border: 1px dashed #334155; border-radius: 10px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    #diagramHost svg { touch-action: none; cursor: grab; width: 100%; height: auto; }
+    .mermaid { display: none; }
+    .grid { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; font-size: 12px; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Orcest Ecosystem Topology</h1>
+    <p style="color:#94a3b8;">Interactive architecture diagram + realtime service snapshot.</p>
+    <div class="toolbar">
+      <a href="/">Dashboard</a>
+      <a href="/api/status?force=true" target="_blank">Open Status JSON</a>
+      <button id="zoomInBtn" type="button">Zoom In</button>
+      <button id="zoomOutBtn" type="button">Zoom Out</button>
+      <button id="resetBtn" type="button">Reset</button>
+      <button id="exportSvgBtn" type="button">Export SVG</button>
+      <button id="exportPngBtn" type="button">Export PNG</button>
+    </div>
+    <div class="card">
+      <div id="diagramHost"></div>
+      <pre class="mermaid">
+flowchart TD
+  userNode["Users"]
+  statusNode["status.orcest.ai"]
+  coreNode["orcest.ai Core"]
+  rmNode["RainyModel"]
+  laminoNode["Lamino"]
+  maestristNode["Maestrist"]
+  orcideNode["Orcide"]
+  ssoNode["Login SSO"]
+  ollamaPrimaryNode["Ollama Primary"]
+  ollamaSecondaryNode["Ollama Secondary"]
+
+  userNode --> statusNode
+  statusNode --> coreNode
+  statusNode --> rmNode
+  statusNode --> laminoNode
+  statusNode --> maestristNode
+  statusNode --> orcideNode
+  statusNode --> ssoNode
+  rmNode --> ollamaPrimaryNode
+  rmNode --> ollamaSecondaryNode
+      </pre>
+    </div>
+    <div class="grid">
+      <div class="panel">
+        <strong>Realtime Snapshot</strong>
+        <pre id="snapshot">Loading...</pre>
+      </div>
+      <div class="panel">
+        <strong>API Links</strong>
+        <pre>/api/status
+/api/status/stream
+/api/announcements
+/api/topology</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function setupPanZoomAndExports() {
+      const svg = document.querySelector('.mermaid svg');
+      const host = document.getElementById('diagramHost');
+      if (!svg || !host || !window.Panzoom) return;
+      host.innerHTML = '';
+      host.appendChild(svg);
+      const panzoom = window.Panzoom(svg, { maxScale: 3.5, minScale: 0.4, step: 0.2 });
+      host.addEventListener('wheel', panzoom.zoomWithWheel, { passive: false });
+
+      document.getElementById('zoomInBtn').addEventListener('click', () => panzoom.zoomIn());
+      document.getElementById('zoomOutBtn').addEventListener('click', () => panzoom.zoomOut());
+      document.getElementById('resetBtn').addEventListener('click', () => panzoom.reset());
+
+      document.getElementById('exportSvgBtn').addEventListener('click', () => {
+        const svgRaw = new XMLSerializer().serializeToString(svg);
+        const blob = new Blob([svgRaw], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'status-topology.svg';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+
+      document.getElementById('exportPngBtn').addEventListener('click', () => {
+        const svgRaw = new XMLSerializer().serializeToString(svg);
+        const image64 = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgRaw)));
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width || 1600;
+          canvas.height = img.height || 900;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#0a0a0f';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          const a = document.createElement('a');
+          a.href = canvas.toDataURL('image/png');
+          a.download = 'status-topology.png';
+          a.click();
+        };
+        img.src = image64;
+      });
+    }
+
+    async function refreshSnapshot() {
+      try {
+        const r = await fetch('/api/status?force=true');
+        const d = await r.json();
+        document.getElementById('snapshot').textContent = JSON.stringify({
+          overall: d.overall,
+          summary: d.summary,
+          checked_at: d.checked_at
+        }, null, 2);
+      } catch (e) {
+        document.getElementById('snapshot').textContent = 'Failed: ' + e.message;
+      }
+    }
+
+    window.addEventListener('load', () => {
+      setTimeout(setupPanZoomAndExports, 350);
+      refreshSnapshot();
+      setInterval(refreshSnapshot, 10000);
+    });
+  </script>
+</body>
+</html>
+

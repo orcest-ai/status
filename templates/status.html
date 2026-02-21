@@ -1,188 +1,198 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Orcest AI — System Status</title>
-<meta name="description" content="Real-time status monitoring for the Orcest AI ecosystem">
-<meta http-equiv="refresh" content="60">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh}
-a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
-.container{max-width:1000px;margin:0 auto;padding:20px}
-.header{text-align:center;padding:40px 20px 20px}
-.header h1{font-size:2rem;font-weight:800;color:#f8fafc;margin-bottom:4px}
-.header p{color:#94a3b8;font-size:.9rem}
-.overall{text-align:center;padding:24px;margin:20px 0;border-radius:16px;font-size:1.2rem;font-weight:700}
-.status-operational{background:#052e16;border:1px solid #166534;color:#4ade80}
-.status-degraded{background:#422006;border:1px solid #92400e;color:#fbbf24}
-.status-down{background:#450a0a;border:1px solid #991b1b;color:#f87171}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:20px 0}
-.stat{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px;text-align:center}
-.stat .num{font-size:1.8rem;font-weight:800;color:#60a5fa}
-.stat .label{color:#94a3b8;font-size:.8rem;margin-top:4px}
-.section{margin:30px 0}
-.section h2{font-size:1.3rem;color:#f8fafc;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #1f2937}
-.svc-grid{display:flex;flex-direction:column;gap:8px}
-.svc{display:grid;grid-template-columns:1fr auto auto auto;gap:16px;align-items:center;background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px 20px}
-.svc:hover{border-color:#374151}
-.svc-name{font-weight:600;color:#f8fafc;font-size:.95rem}
-.svc-desc{color:#94a3b8;font-size:.8rem;margin-top:2px}
-.svc-type{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase}
-.type-web{background:#1e3a5f;color:#60a5fa}
-.type-api{background:#1a3a2a;color:#4ade80}
-.type-internal{background:#3a2a1a;color:#fbbf24}
-.badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:.8rem;font-weight:600}
-.badge-operational{background:#052e16;color:#4ade80}
-.badge-degraded{background:#422006;color:#fbbf24}
-.badge-down{background:#450a0a;color:#f87171}
-.badge-timeout{background:#2a1a3a;color:#c084fc}
-.latency{color:#94a3b8;font-size:.85rem;font-family:monospace}
-.ann-list{display:flex;flex-direction:column;gap:10px}
-.ann{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px 20px}
-.ann-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-.ann-date{color:#64748b;font-size:.8rem}
-.ann-type{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase}
-.ann-type-info{background:#1e3a5f;color:#60a5fa}
-.ann-type-success{background:#1a3a2a;color:#4ade80}
-.ann-type-warning{background:#422006;color:#fbbf24}
-.ann-type-alert{background:#450a0a;color:#f87171}
-.ann h4{color:#f8fafc;font-size:.95rem}
-.ann p{color:#94a3b8;font-size:.85rem;line-height:1.5}
-.arch{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;overflow-x:auto}
-.arch pre{color:#94a3b8;font-size:.75rem;line-height:1.6;font-family:'Fira Code',monospace;white-space:pre}
-.audit-table{width:100%;border-collapse:collapse;margin-top:12px}
-.audit-table th,.audit-table td{text-align:left;padding:10px 14px;border-bottom:1px solid #1f2937;font-size:.85rem}
-.audit-table th{color:#94a3b8;font-weight:600;background:#0f1629}
-.audit-table td{color:#e0e0e0}
-footer{text-align:center;padding:30px 20px;color:#4b5563;font-size:.8rem;border-top:1px solid #1f2937;margin-top:40px}
-@media(max-width:640px){.svc{grid-template-columns:1fr;gap:8px}.stats{grid-template-columns:1fr 1fr}}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Orcest Status Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --panel: #111827;
+      --line: #1f2937;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --link: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 6px 0; }
+    .sub { margin: 0 0 18px; color: var(--muted); }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .toolbar a, .toolbar button {
+      color: var(--text); border: 1px solid var(--line); background: var(--panel);
+      text-decoration: none; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    }
+    .toolbar a:hover, .toolbar button:hover { border-color: var(--link); color: var(--link); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; margin-bottom: 16px; }
+    .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .kpi .value { font-size: 24px; font-weight: 700; margin-top: 6px; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .card h3 { margin: 0 0 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    .status { font-weight: 700; }
+    .operational { color: var(--ok); }
+    .degraded { color: var(--warn); }
+    .down, .timeout, .partial_outage { color: var(--bad); }
+    .ann { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+    .ann .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .footer { margin-top: 16px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  </style>
 </head>
 <body>
-<div class="container">
-<div class="header">
-<h1>Orcest AI System Status</h1>
-<p>Real-time monitoring of all ecosystem services</p>
-</div>
+  <div class="wrap">
+    <h1>Orcest AI Ecosystem Status</h1>
+    <p class="sub">Real-time service monitoring, latency trends, announcements, and interactive system topology.</p>
 
-<div class="overall {{ overall_class }}">{{ overall_text }}</div>
+    <div class="toolbar">
+      <a href="/fc">Interactive Diagram</a>
+      <a href="/api/status?force=true" target="_blank">Raw JSON</a>
+      <button id="toggleRealtime">Pause Realtime</button>
+      <span id="updatedAt" style="color:var(--muted);padding:8px 0;"></span>
+    </div>
 
-<div class="stats">
-<div class="stat"><div class="num">{{ operational }}</div><div class="label">Operational</div></div>
-<div class="stat"><div class="num">{{ total - operational }}</div><div class="label">Issues</div></div>
-<div class="stat"><div class="num">{{ total }}</div><div class="label">Total Services</div></div>
-<div class="stat"><div class="num" style="font-size:1rem">{{ checked_at }}</div><div class="label">Last Checked</div></div>
-</div>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Overall</div><div class="value status {{ status_data.overall }}" id="overall">{{ status_data.overall }}</div></div>
+      <div class="kpi"><div class="label">Operational</div><div class="value" id="operational">{{ status_data.summary.operational }}</div></div>
+      <div class="kpi"><div class="label">Degraded</div><div class="value" id="degraded">{{ status_data.summary.degraded }}</div></div>
+      <div class="kpi"><div class="label">Down</div><div class="value" id="down">{{ status_data.summary.down }}</div></div>
+      <div class="kpi"><div class="label">Avg Latency</div><div class="value" id="avgLatency">{{ status_data.summary.avg_latency_ms }} ms</div></div>
+    </div>
 
-<div class="section">
-<h2>Service Status</h2>
-<div class="svc-grid">
-{% for svc in services %}
-<div class="svc">
-<div>
-<div class="svc-name">{{ svc.name }} <span class="svc-type type-{{ svc.type }}">{{ svc.type }}</span></div>
-<div class="svc-desc">{{ svc.description }}</div>
-</div>
-<div class="latency">{{ svc.latency_ms }}ms</div>
-<div><span class="badge badge-{{ svc.status }}">{{ svc.status }}</span></div>
-<div><a href="{{ svc.url }}" target="_blank" style="font-size:.8rem">Visit</a></div>
-</div>
-{% endfor %}
-</div>
-</div>
+    <div class="grid">
+      <div class="card">
+        <h3>Services</h3>
+        <table>
+          <thead><tr><th>Service</th><th>Type</th><th>Status</th><th>Latency</th><th>Code</th></tr></thead>
+          <tbody id="serviceRows">
+            {% for svc in status_data.services %}
+            <tr>
+              <td>{{ svc.name }}</td>
+              <td>{{ svc.type }}</td>
+              <td class="status {{ svc.status }}">{{ svc.status }}</td>
+              <td>{{ svc.latency_ms }} ms</td>
+              <td>{{ svc.code }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Latency Trend (Realtime)</h3>
+        <canvas id="latencyChart" height="230"></canvas>
+      </div>
+    </div>
 
-<div class="section">
-<h2>Announcements & Alerts</h2>
-<div class="ann-list">
-{% for ann in announcements %}
-<div class="ann">
-<div class="ann-header">
-<span class="ann-type ann-type-{{ ann.type }}">{{ ann.type }}</span>
-<span class="ann-date">{{ ann.date }}</span>
-</div>
-<h4>{{ ann.title }}</h4>
-<p>{{ ann.body }}</p>
-</div>
-{% endfor %}
-</div>
-</div>
+    <div class="grid" style="margin-top:14px;">
+      <div class="card">
+        <h3>Announcements</h3>
+        <div id="announcements">
+          {% for ann in announcements %}
+          <div class="ann">
+            <div class="meta">{{ ann.date }} · {{ ann.type }}</div>
+            <strong>{{ ann.title }}</strong>
+            <div>{{ ann.body }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="card">
+        <h3>Status Distribution</h3>
+        <canvas id="distributionChart" height="230"></canvas>
+      </div>
+    </div>
 
-<div class="section">
-<h2>Architecture Overview</h2>
-<div class="arch"><pre>
-                         +------------------+
-                         |    orcest.ai     |
-                         |  Landing + API   |
-                         +--------+---------+
-                                  |
-              +-------------------+-------------------+
-              |                   |                   |
-     +--------+--------+ +-------+-------+ +---------+---------+
-     |   login.orcest  | |  rm.orcest.ai | | status.orcest.ai  |
-     |    SSO/OIDC     | |  RainyModel   | |    Monitoring      |
-     +-----------------+ +-------+-------+ +-------------------+
-                                 |
-                    +------------+------------+
-                    |            |            |
-           +-------+---+ +-----+-----+ +----+------+
-           | HF/Free   | | Ollama    | | OpenRouter|
-           | (FREE)    | | (INTERNAL)| | (PREMIUM) |
-           +-----------+ +-----+-----+ +-----------+
-                               |
-                    +----------+----------+
-                    |                     |
-              +-----+------+       +-----+------+
-              | 16GB (14b) |       | 8GB (7b)   |
-              | Primary    |       | Secondary  |
-              +------------+       +------------+
+    <div class="footer">Auto-updates every 8s via SSE. Fallback polling every 15s if stream fails.</div>
+  </div>
 
-     +------------------+  +------------------+  +------------------+
-     |  llm.orcest.ai   |  | agent.orcest.ai  |  |  ide.orcest.ai   |
-     |     Lamino        |  |    Maestrist      |  |     Orcide        |
-     |  Chat + RAG       |  |  AI Dev Agent     |  |  AI Code Editor   |
-     +------------------+  +------------------+  +------------------+
-</pre></div>
-</div>
+  <script>
+    let realtime = true;
+    const labels = [];
+    const latData = [];
 
-<div class="section">
-<h2>Quality Audit Summary</h2>
-<table class="audit-table">
-<tr><th>Check</th><th>Status</th><th>Details</th></tr>
-<tr><td>TLS Certificates</td><td><span class="badge badge-operational">PASS</span></td><td>All domains have valid HTTPS certificates</td></tr>
-<tr><td>HTTP → HTTPS Redirect</td><td><span class="badge badge-operational">PASS</span></td><td>All services redirect HTTP to HTTPS</td></tr>
-<tr><td>Swagger/OpenAPI Exposure</td><td><span class="badge badge-degraded">PENDING</span></td><td>PRs submitted to disable on orcest.ai and rm.orcest.ai</td></tr>
-<tr><td>API Authentication</td><td><span class="badge badge-operational">PASS</span></td><td>RainyModel requires Bearer token, Lamino/Maestrist require session</td></tr>
-<tr><td>SSO Provider</td><td><span class="badge badge-operational">PASS</span></td><td>login.orcest.ai live with OIDC support</td></tr>
-<tr><td>Upstream Branding</td><td><span class="badge badge-operational">PASS</span></td><td>Zero trace rebranding completed across all repos</td></tr>
-<tr><td>Fork Detachment</td><td><span class="badge badge-degraded">PENDING</span></td><td>GitHub fork relationships need manual removal</td></tr>
-<tr><td>Email Isolation</td><td><span class="badge badge-operational">PASS</span></td><td>orcest.ai MX/SPF/DKIM/DMARC untouched</td></tr>
-<tr><td>Branch Protection</td><td><span class="badge badge-operational">PASS</span></td><td>CODEOWNERS and SECURITY.md added to all repos</td></tr>
-<tr><td>Dependency Scanning</td><td><span class="badge badge-operational">PASS</span></td><td>Dependabot configured for all repos</td></tr>
-</table>
-</div>
+    const latencyChart = new Chart(document.getElementById('latencyChart'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Avg Latency (ms)', data: latData, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.15)', tension: .3, fill: true }] },
+      options: { animation: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { labels: { color: '#e2e8f0' }}}}
+    });
 
-<div class="section">
-<h2>API Endpoints</h2>
-<table class="audit-table">
-<tr><th>Service</th><th>Endpoint</th><th>Auth</th><th>Description</th></tr>
-<tr><td>RainyModel</td><td><code>/v1/models</code></td><td>Bearer Key</td><td>List available model aliases</td></tr>
-<tr><td>RainyModel</td><td><code>/v1/chat/completions</code></td><td>Bearer Key</td><td>Chat completion with auto-routing</td></tr>
-<tr><td>RainyModel</td><td><code>/health</code></td><td>None</td><td>Health check</td></tr>
-<tr><td>Login SSO</td><td><code>/.well-known/openid-configuration</code></td><td>None</td><td>OIDC discovery</td></tr>
-<tr><td>Login SSO</td><td><code>/oauth2/authorize</code></td><td>Session</td><td>Authorization endpoint</td></tr>
-<tr><td>Login SSO</td><td><code>/oauth2/token</code></td><td>Client Secret</td><td>Token exchange</td></tr>
-<tr><td>Login SSO</td><td><code>/api/token/verify</code></td><td>Bearer Token</td><td>Token verification</td></tr>
-<tr><td>Status</td><td><code>/api/status</code></td><td>None</td><td>JSON status of all services</td></tr>
-<tr><td>Status</td><td><code>/api/announcements</code></td><td>None</td><td>System announcements</td></tr>
-</table>
-</div>
+    const distributionChart = new Chart(document.getElementById('distributionChart'), {
+      type: 'doughnut',
+      data: { labels: ['Operational', 'Degraded', 'Down'], datasets: [{ data: [0,0,0], backgroundColor: ['#22c55e','#f59e0b','#ef4444'] }] },
+      options: { animation: false, plugins: { legend: { labels: { color: '#e2e8f0' }}}}
+    });
 
-</div>
-<footer>
-<p>Orcest AI Status Monitor &mdash; Auto-refreshes every 60 seconds</p>
-<p style="margin-top:8px"><a href="https://orcest.ai">orcest.ai</a> &middot; <a href="https://login.orcest.ai">Login</a> &middot; <a href="/api/status">API</a></p>
-</footer>
+    function fmtTime(iso) {
+      try { return new Date(iso).toLocaleTimeString(); } catch (_) { return iso; }
+    }
+
+    function updateUI(data) {
+      document.getElementById('overall').textContent = data.overall;
+      document.getElementById('overall').className = 'value status ' + data.overall;
+      document.getElementById('operational').textContent = data.summary.operational;
+      document.getElementById('degraded').textContent = data.summary.degraded;
+      document.getElementById('down').textContent = data.summary.down;
+      document.getElementById('avgLatency').textContent = data.summary.avg_latency_ms + ' ms';
+      document.getElementById('updatedAt').textContent = 'Last update: ' + fmtTime(data.checked_at);
+
+      const rows = data.services.map(s => `
+        <tr>
+          <td>${s.name}</td>
+          <td>${s.type}</td>
+          <td class="status ${s.status}">${s.status}</td>
+          <td>${s.latency_ms} ms</td>
+          <td>${s.code}</td>
+        </tr>
+      `).join('');
+      document.getElementById('serviceRows').innerHTML = rows;
+
+      labels.push(fmtTime(data.checked_at));
+      latData.push(data.summary.avg_latency_ms);
+      if (labels.length > 20) { labels.shift(); latData.shift(); }
+      latencyChart.update();
+
+      distributionChart.data.datasets[0].data = [data.summary.operational, data.summary.degraded, data.summary.down];
+      distributionChart.update();
+    }
+
+    async function pollStatus() {
+      if (!realtime) return;
+      try {
+        const r = await fetch('/api/status?force=true');
+        if (!r.ok) return;
+        const data = await r.json();
+        updateUI(data);
+      } catch (_) {}
+    }
+
+    function startStream() {
+      const es = new EventSource('/api/status/stream');
+      es.onmessage = (ev) => {
+        if (!realtime) return;
+        try { updateUI(JSON.parse(ev.data)); } catch (_) {}
+      };
+      es.onerror = () => {
+        es.close();
+        setInterval(pollStatus, 15000);
+      };
+    }
+
+    document.getElementById('toggleRealtime').addEventListener('click', function() {
+      realtime = !realtime;
+      this.textContent = realtime ? 'Pause Realtime' : 'Resume Realtime';
+    });
+
+    startStream();
+  </script>
 </body>
 </html>
+

@@ -3,12 +3,15 @@ services:
     runtime: docker
     name: status-orcest-ai
     plan: starter
-    repo: https://github.com/orcest-ai/status
+    repo: https://github.com/orcest-ai/status.git
     branch: main
     rootDir: /
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    numInstances: 1
     domains:
       - status.orcest.ai
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+
