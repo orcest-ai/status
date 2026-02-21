@@ -12,7 +12,7 @@
   <style>
     :root { --bg:#0a0a0f; --panel:#111827; --line:#1f2937; --txt:#e2e8f0; --muted:#94a3b8; --link:#60a5fa; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; }
     body { margin: 0; background: var(--bg); color: var(--txt); font-family: Inter, system-ui, sans-serif; }
-    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    .wrap { max-width: 1380px; margin: 0 auto; padding: 24px; }
     .toolbar, .views { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
     .toolbar button, .toolbar a, .views a {
       border: 1px solid #334155; background: var(--panel); color: var(--txt);
@@ -56,6 +56,12 @@
       stroke: #60a5fa;
       opacity: 0.9;
     }
+    .replayItem {
+      border: 1px solid #1e293b; border-radius: 8px; padding: 8px; margin-bottom: 8px;
+      cursor: pointer; background: #020617;
+    }
+    .replayItem:hover { border-color: #60a5fa; }
+    .replayItem.active { border-color: #22c55e; box-shadow: inset 0 0 0 1px #22c55e; }
     @keyframes flowDash { to { stroke-dashoffset: -36; } }
     @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
   </style>
@@ -83,6 +89,8 @@
       <button id="resetBtn" type="button">Reset</button>
       <button id="exportSvgBtn" type="button">Export SVG</button>
       <button id="exportPngBtn" type="button">Export PNG</button>
+      <button id="impactModeBtn" type="button">Impact Mode: OFF</button>
+      <button id="autoReplayBtn" type="button">Auto Replay: ON</button>
     </div>
 
     <div class="card">
@@ -105,6 +113,15 @@
         <strong>Linked Nodes in This View</strong>
         <pre id="nodeLinksPanel">Loading...</pre>
       </div>
+      <div class="panel">
+        <strong>Recent Request Path Replay</strong>
+        <pre id="flowSummary">Loading...</pre>
+        <div id="replayList" style="margin-top:8px; max-height: 220px; overflow:auto;"></div>
+      </div>
+      <div class="panel">
+        <strong>Impact Analyzer</strong>
+        <pre id="impactPanel">Loading...</pre>
+      </div>
     </div>
   </div>
 
@@ -126,6 +143,12 @@
     const currentView = {{ current_view | tojson }};
     let latestStatus = null;
     let activeNodeContext = null;
+    let impactMode = false;
+    let autoReplay = true;
+    let lastImpact = null;
+    let replayData = [];
+    let selectedReplayEventId = null;
+    let replayIdx = 0;
 
     function normalizeLabel(v) {
       return String(v || '').replace(/\s+/g, ' ').trim();
@@ -190,6 +213,87 @@
       return normalizeLabel(nodeGroup.textContent);
     }
 
+    function colorForStatus(status) {
+      if (status === 'operational') return { fill: '#0b3a21', stroke: '#22c55e' };
+      if (status === 'degraded') return { fill: '#3a2a08', stroke: '#f59e0b' };
+      if (status === 'down' || status === 'timeout' || status === 'partial_outage') return { fill: '#3f1212', stroke: '#ef4444' };
+      return { fill: '#1f2937', stroke: '#334155' };
+    }
+
+    function impactColor(score) {
+      if (score >= 0.85) return { fill: '#521515', stroke: '#ef4444' };
+      if (score >= 0.55) return { fill: '#4a2e0e', stroke: '#f59e0b' };
+      if (score > 0.2) return { fill: '#1f3658', stroke: '#60a5fa' };
+      return null;
+    }
+
+    function formatMs(v) {
+      if (v == null) return '-';
+      return `${Number(v).toFixed(2)} ms`;
+    }
+
+    function statusBadge(status) {
+      const c = colorForStatus(status || 'unknown');
+      return `<span class="badge" style="border-color:${c.stroke}; color:${c.stroke};">${status || 'unknown'}</span>`;
+    }
+
+    function findServiceNameByLabel(label) {
+      const serviceMap = topology.service_map || {};
+      const entry = Object.entries(serviceMap).find(([k]) => normalizeLabel(label).includes(normalizeLabel(k)));
+      return entry ? entry[1] : null;
+    }
+
+    function nodeCenter(nodeGroup) {
+      const box = nodeGroup.getBBox();
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    }
+
+    function findNodeByAlias(svg, alias) {
+      const key = normalizeLabel(alias).toLowerCase();
+      const nodes = [...svg.querySelectorAll('g.node')];
+      return nodes.find((n) => nodeLabel(n).toLowerCase().includes(key)) || null;
+    }
+
+    function ensureReplayLayer(svg) {
+      let layer = svg.querySelector('#replay-overlay-layer');
+      if (!layer) {
+        layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        layer.setAttribute('id', 'replay-overlay-layer');
+        layer.setAttribute('style', 'pointer-events:none;');
+        svg.appendChild(layer);
+      }
+      layer.innerHTML = '';
+      return layer;
+    }
+
+    function drawReplayPath(svg, evt) {
+      if (!svg || !evt || !evt.nodes || evt.nodes.length < 2) return;
+      const layer = ensureReplayLayer(svg);
+      const qps = Number(evt.qps || 1.0);
+      const latency = Number(evt.latency_ms || 600.0);
+      const width = Math.max(2, Math.min(9, 1.5 + (qps / 1.8)));
+      const duration = Math.max(0.8, Math.min(3.2, latency / 520.0));
+      for (let i = 0; i < evt.nodes.length - 1; i += 1) {
+        const a = findNodeByAlias(svg, evt.nodes[i]);
+        const b = findNodeByAlias(svg, evt.nodes[i + 1]);
+        if (!a || !b) continue;
+        const p1 = nodeCenter(a);
+        const p2 = nodeCenter(b);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', String(p1.x));
+        line.setAttribute('y1', String(p1.y));
+        line.setAttribute('x2', String(p2.x));
+        line.setAttribute('y2', String(p2.y));
+        line.setAttribute('stroke', evt.status === 'degraded' ? '#f59e0b' : '#38bdf8');
+        line.setAttribute('stroke-width', String(width));
+        line.setAttribute('stroke-linecap', 'round');
+        line.setAttribute('opacity', '0.9');
+        line.setAttribute('stroke-dasharray', '12 9');
+        line.style.animation = `flowDash ${duration}s linear infinite`;
+        layer.appendChild(line);
+      }
+    }
+
     function applyNodeLinks(svg) {
       const links = topology.node_links || {};
       document.getElementById('nodeLinksPanel').textContent = JSON.stringify(links, null, 2);
@@ -199,22 +303,13 @@
         const matched = linkEntries.find(([k]) => label.includes(k));
         const target = matched ? matched[1] : null;
         node.style.cursor = 'pointer';
-        node.addEventListener('click', () => {
-          openNodeDrawer({ label, target });
-        });
+        node.addEventListener('click', () => openNodeDrawer({ label, target }));
         node.addEventListener('dblclick', () => {
           if (!target) return;
           if (target.startsWith('/')) window.location.href = target;
           else window.open(target, '_blank', 'noopener');
         });
       });
-    }
-
-    function colorForStatus(status) {
-      if (status === 'operational') return { fill: '#0b3a21', stroke: '#22c55e' };
-      if (status === 'degraded') return { fill: '#3a2a08', stroke: '#f59e0b' };
-      if (status === 'down' || status === 'timeout' || status === 'partial_outage') return { fill: '#3f1212', stroke: '#ef4444' };
-      return { fill: '#1f2937', stroke: '#334155' };
     }
 
     function applyRealtimeNodeStatus(svg, statusData) {
@@ -239,61 +334,85 @@
       });
     }
 
-    async function refreshSnapshotAndStatus(svg) {
-      try {
-        const r = await fetch('/api/status?force=true');
-        const d = await r.json();
-        latestStatus = d;
-        document.getElementById('snapshot').textContent = JSON.stringify({
-          overall: d.overall,
-          summary: d.summary,
-          checked_at: d.checked_at
-        }, null, 2);
-        if (svg) applyRealtimeNodeStatus(svg, d);
-        if (activeNodeContext) refreshActiveNodeInDrawer();
-      } catch (e) {
-        document.getElementById('snapshot').textContent = 'Failed: ' + e.message;
+    function applyImpactHeatmap(svg) {
+      if (!impactMode || !lastImpact) return;
+      const impactScores = lastImpact.impact_scores || {};
+      svg.querySelectorAll('g.node').forEach((node) => {
+        const label = nodeLabel(node);
+        const service = findServiceNameByLabel(label);
+        if (!service) return;
+        const score = Number(impactScores[service] || 0);
+        if (score <= 0) return;
+        const heat = impactColor(score);
+        if (!heat) return;
+        const shape = findNodeShape(node);
+        if (!shape) return;
+        shape.style.fill = heat.fill;
+        shape.style.stroke = heat.stroke;
+        shape.style.strokeWidth = '2.5px';
+      });
+    }
+
+    function applyFlowAnimation(svg) {
+      if (!svg) return;
+      const paths = svg.querySelectorAll('g.edgePath path.path');
+      let avgQps = 1.0;
+      let avgLatency = 700.0;
+      if (replayData.length) {
+        avgQps = replayData.reduce((a, x) => a + Number(x.qps || 0), 0) / replayData.length;
+        avgLatency = replayData.reduce((a, x) => a + Number(x.latency_ms || 0), 0) / replayData.length;
       }
-    }
-
-    function formatMs(v) {
-      if (v == null) return '-';
-      return `${Number(v).toFixed(2)} ms`;
-    }
-
-    function statusBadge(status) {
-      const c = colorForStatus(status || 'unknown');
-      return `<span class="badge" style="border-color:${c.stroke}; color:${c.stroke};">${status || 'unknown'}</span>`;
-    }
-
-    function renderSparkline(points) {
-      const values = points.map((p) => Number(p.latency_ms || 0));
-      if (!values.length) return '<div class="muted">No latency history yet.</div>';
-      const w = 360;
-      const h = 90;
-      const max = Math.max(...values, 1);
-      const min = Math.min(...values, 0);
-      const range = Math.max(max - min, 1);
-      const step = values.length > 1 ? (w - 12) / (values.length - 1) : 0;
-      const coords = values.map((v, i) => {
-        const x = 6 + i * step;
-        const y = h - 8 - ((v - min) / range) * (h - 16);
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      }).join(' ');
-      return `
-        <svg id="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-          <polyline fill="none" stroke="#334155" stroke-width="1" points="6,${h - 8} ${w - 6},${h - 8}"></polyline>
-          <polyline fill="none" stroke="#60a5fa" stroke-width="2" points="${coords}"></polyline>
-        </svg>
-        <div class="muted" style="margin-top:6px;">min ${formatMs(min)} / max ${formatMs(max)} / latest ${formatMs(values[values.length - 1])}</div>
-      `;
+      const width = Math.max(1.5, Math.min(5, 1.2 + (avgQps / 4.0)));
+      const duration = Math.max(1.0, Math.min(3.5, avgLatency / 380.0));
+      paths.forEach((p, idx) => {
+        const parent = p.closest('g.edgePath');
+        if (!parent) return;
+        parent.classList.add('flow-edge');
+        p.style.strokeWidth = `${width}px`;
+        p.style.animationDuration = `${duration}s`;
+        p.style.animationDelay = `${(idx % 8) * 0.08}s`;
+      });
     }
 
     async function fetchNodeDetail(serviceName) {
-      const url = `/api/status/node/${encodeURIComponent(serviceName)}?limit=50`;
+      const url = `/api/status/node/${encodeURIComponent(serviceName)}?limit=60`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`Node detail failed (${r.status})`);
       return r.json();
+    }
+
+    function renderMultiMetricTimeline(points) {
+      if (!points.length) return '<div class="muted">No timeline samples yet.</div>';
+      const w = 360;
+      const h = 130;
+      const lat = points.map((p) => Number(p.latency_ms || 0));
+      const err = [];
+      const tran = [];
+      for (let i = 0; i < points.length; i += 1) {
+        const window = points.slice(Math.max(0, i - 9), i + 1);
+        const failCount = window.filter((x) => Number(x.code || 0) >= 400 || ['degraded', 'down', 'timeout', 'partial_outage'].includes(String(x.status))).length;
+        err.push((failCount / window.length) * 100);
+        const prev = i > 0 ? points[i - 1].status : points[i].status;
+        tran.push(points[i].status !== prev ? 100 : 0);
+      }
+      const mkPolyline = (values, color, maxV) => {
+        const step = values.length > 1 ? (w - 12) / (values.length - 1) : 0;
+        const coords = values.map((v, i) => {
+          const x = 6 + i * step;
+          const y = h - 8 - ((v / Math.max(maxV, 1)) * (h - 16));
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(' ');
+        return `<polyline fill="none" stroke="${color}" stroke-width="2" points="${coords}"></polyline>`;
+      };
+      return `
+        <svg id="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+          <polyline fill="none" stroke="#334155" stroke-width="1" points="6,${h - 8} ${w - 6},${h - 8}"></polyline>
+          ${mkPolyline(lat, '#60a5fa', Math.max(...lat, 1))}
+          ${mkPolyline(err, '#ef4444', 100)}
+          ${mkPolyline(tran, '#f59e0b', 100)}
+        </svg>
+        <div class="muted" style="margin-top:6px;">blue=latency, red=error rate window, amber=status transition spikes</div>
+      `;
     }
 
     function closeNodeDrawer() {
@@ -301,12 +420,6 @@
       drawer.classList.remove('open');
       drawer.setAttribute('aria-hidden', 'true');
       activeNodeContext = null;
-    }
-
-    function findServiceNameByLabel(label) {
-      const serviceMap = topology.service_map || {};
-      const entry = Object.entries(serviceMap).find(([k]) => normalizeLabel(label).includes(normalizeLabel(k)));
-      return entry ? entry[1] : null;
     }
 
     async function openNodeDrawer(ctx) {
@@ -341,18 +454,24 @@
         const data = await fetchNodeDetail(serviceName);
         const svc = data.service || {};
         const history = data.history || [];
+        const m = data.metrics || {};
         drawerSub.textContent = `service: ${serviceName} • updated ${svc.checked_at || data.updated_at || '-'}`;
         drawerBody.innerHTML = `
           <div class="kv">
             <div class="k">Status</div><div>${statusBadge(svc.status)}</div>
             <div class="k">Latency</div><div>${formatMs(svc.latency_ms)}</div>
             <div class="k">HTTP</div><div>${svc.code == null ? '-' : svc.code}</div>
+            <div class="k">Error Rate</div><div>${(m.error_rate_pct ?? 0).toFixed(2)}%</div>
+            <div class="k">Transitions</div><div>${m.status_transitions ?? 0}</div>
+            <div class="k">P95/P99</div><div>${formatMs(m.p95_latency_ms)} / ${formatMs(m.p99_latency_ms)}</div>
+            <div class="k">SLO</div><div>${(m.availability_pct ?? 0).toFixed(2)}% vs ${(m.slo_target_pct ?? 99.5)}%</div>
             <div class="k">Endpoint</div><div style="word-break:break-word;">${svc.url || '-'}</div>
           </div>
-          <strong style="font-size:13px;">Latency history (latest 50 checks)</strong>
-          <div style="margin-top:8px;">${renderSparkline(history)}</div>
+          <strong style="font-size:13px;">Live timeline (multi-metric)</strong>
+          <div style="margin-top:8px;">${renderMultiMetricTimeline(history)}</div>
           <div class="drawerActions">
             ${activeNodeContext.target ? `<a href="${activeNodeContext.target}" ${activeNodeContext.target.startsWith('/') ? '' : 'target="_blank" rel="noopener"'}>Open linked topology</a>` : ''}
+            <a href="/node/${encodeURIComponent(serviceName)}" target="_blank">Open full drill-down</a>
             ${svc.url ? `<a href="${svc.url}" target="_blank" rel="noopener">Open health URL</a>` : ''}
           </div>
         `;
@@ -362,26 +481,114 @@
       }
     }
 
-    function applyFlowAnimation(svg) {
-      if (!svg) return;
-      const paths = svg.querySelectorAll('g.edgePath path.path');
-      paths.forEach((p, idx) => {
-        const parent = p.closest('g.edgePath');
-        if (!parent) return;
-        parent.classList.add('flow-edge');
-        p.style.animationDelay = `${(idx % 8) * 0.08}s`;
+    async function refreshImpact(svg) {
+      try {
+        const r = await fetch('/api/topology/impact');
+        const d = await r.json();
+        lastImpact = d;
+        document.getElementById('impactPanel').textContent = JSON.stringify(d, null, 2);
+        if (svg) applyImpactHeatmap(svg);
+      } catch (e) {
+        document.getElementById('impactPanel').textContent = `impact fetch failed: ${e.message}`;
+      }
+    }
+
+    function renderReplayList(svg) {
+      const root = document.getElementById('replayList');
+      root.innerHTML = '';
+      replayData.slice().reverse().forEach((evt) => {
+        const item = document.createElement('div');
+        item.className = `replayItem ${selectedReplayEventId === evt.event_id ? 'active' : ''}`;
+        item.innerHTML = `
+          <div style="font-weight:600; font-size:12px;">${evt.flow_name}</div>
+          <div class="muted">qps ${Number(evt.qps).toFixed(2)} • latency ${formatMs(evt.latency_ms)} • ${evt.status}</div>
+          <div class="muted">${evt.checked_at}</div>
+        `;
+        item.addEventListener('click', () => {
+          selectedReplayEventId = evt.event_id;
+          drawReplayPath(svg, evt);
+          renderReplayList(svg);
+        });
+        root.appendChild(item);
+      });
+    }
+
+    async function refreshReplay(svg) {
+      try {
+        const r = await fetch('/api/flows/replay?limit=40');
+        const d = await r.json();
+        replayData = d.recent_paths || [];
+        document.getElementById('flowSummary').textContent = JSON.stringify(d.summary || {}, null, 2);
+        applyFlowAnimation(svg);
+        renderReplayList(svg);
+        if (!selectedReplayEventId && replayData.length) {
+          const latest = replayData[replayData.length - 1];
+          selectedReplayEventId = latest.event_id;
+          drawReplayPath(svg, latest);
+          renderReplayList(svg);
+        }
+      } catch (e) {
+        document.getElementById('flowSummary').textContent = `replay fetch failed: ${e.message}`;
+      }
+    }
+
+    function autoReplayTick(svg) {
+      if (!autoReplay || replayData.length === 0) return;
+      replayIdx = (replayIdx + 1) % replayData.length;
+      const evt = replayData[replayIdx];
+      selectedReplayEventId = evt.event_id;
+      drawReplayPath(svg, evt);
+      renderReplayList(svg);
+    }
+
+    async function refreshSnapshotAndStatus(svg) {
+      try {
+        const r = await fetch('/api/status?force=true');
+        const d = await r.json();
+        latestStatus = d;
+        document.getElementById('snapshot').textContent = JSON.stringify({
+          overall: d.overall,
+          summary: d.summary,
+          checked_at: d.checked_at
+        }, null, 2);
+        if (svg) applyRealtimeNodeStatus(svg, d);
+        if (svg && impactMode) applyImpactHeatmap(svg);
+        if (activeNodeContext) refreshActiveNodeInDrawer();
+      } catch (e) {
+        document.getElementById('snapshot').textContent = 'Failed: ' + e.message;
+      }
+    }
+
+    function setupToggles(svg) {
+      const impactBtn = document.getElementById('impactModeBtn');
+      const replayBtn = document.getElementById('autoReplayBtn');
+      impactBtn.addEventListener('click', () => {
+        impactMode = !impactMode;
+        impactBtn.textContent = `Impact Mode: ${impactMode ? 'ON' : 'OFF'}`;
+        refreshSnapshotAndStatus(svg);
+      });
+      replayBtn.addEventListener('click', () => {
+        autoReplay = !autoReplay;
+        replayBtn.textContent = `Auto Replay: ${autoReplay ? 'ON' : 'OFF'}`;
       });
     }
 
     window.addEventListener('load', () => {
-      setTimeout(() => {
+      setTimeout(async () => {
         const svg = document.querySelector('.mermaid svg');
         setupPanZoomAndExports(svg);
-        applyFlowAnimation(svg);
         if (svg) applyNodeLinks(svg);
+        setupToggles(svg);
         document.getElementById('closeDrawerBtn').addEventListener('click', closeNodeDrawer);
-        refreshSnapshotAndStatus(svg);
+
+        await refreshSnapshotAndStatus(svg);
+        await refreshImpact(svg);
+        await refreshReplay(svg);
+
         setInterval(() => refreshSnapshotAndStatus(svg), 10000);
+        setInterval(() => refreshImpact(svg), 15000);
+        setInterval(() => refreshReplay(svg), 12000);
+        setInterval(() => autoReplayTick(svg), 3500);
       }, 350);
     });
   </script>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Node Drill-down - {{ service_name }}</title>
+  <style>
+    :root { --bg:#0a0a0f; --panel:#111827; --line:#1f2937; --txt:#e2e8f0; --muted:#94a3b8; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; }
+    body { margin: 0; background: var(--bg); color: var(--txt); font-family: Inter, system-ui, sans-serif; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 22px; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    .toolbar a { border: 1px solid #334155; background: var(--panel); color: var(--txt); border-radius: 8px; padding: 8px 12px; text-decoration: none; }
+    .toolbar a:hover { border-color: #60a5fa; color: #60a5fa; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 8px 10px; font-size: 14px; }
+    .k { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .badge { display:inline-block; padding:3px 8px; border:1px solid #334155; border-radius:999px; font-size:12px; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; font-size: 12px; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } .kv { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Node Drill-down: {{ service_name }}</h1>
+    <div class="toolbar">
+      <a href="/fc">Back to Topology</a>
+      <a href="/api/status/node/{{ service_name }}" target="_blank">Open Node API</a>
+      <a href="/api/status?force=true" target="_blank">Open Status API</a>
+    </div>
+
+    {% if error_message %}
+    <div class="card"><p style="color:#f59e0b;">{{ error_message }}</p></div>
+    {% endif %}
+
+    {% if service %}
+    <div class="card">
+      <strong>Current Service Snapshot</strong>
+      <div class="kv" style="margin-top:8px;">
+        <div class="k">Name</div><div>{{ service.name }}</div>
+        <div class="k">Status</div><div><span class="badge">{{ service.status }}</span></div>
+        <div class="k">Latency</div><div>{{ service.latency_ms }} ms</div>
+        <div class="k">HTTP Code</div><div>{{ service.code }}</div>
+        <div class="k">Health URL</div><div>{{ service.health }}</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <strong>SLA / SLO Metrics</strong>
+        <div class="kv" style="margin-top:8px;">
+          <div class="k">Availability</div><div>{{ metrics.availability_pct }}%</div>
+          <div class="k">Error Rate</div><div>{{ metrics.error_rate_pct }}%</div>
+          <div class="k">P50 Latency</div><div>{{ metrics.p50_latency_ms }} ms</div>
+          <div class="k">P95 Latency</div><div>{{ metrics.p95_latency_ms }} ms</div>
+          <div class="k">P99 Latency</div><div>{{ metrics.p99_latency_ms }} ms</div>
+          <div class="k">Status Transitions</div><div>{{ metrics.status_transitions }}</div>
+          <div class="k">SLO Target</div><div>{{ metrics.slo_target_pct }}%</div>
+          <div class="k">SLO Gap</div><div>{{ metrics.slo_gap_pct }}%</div>
+          <div class="k">SLO Burn Rate</div><div>{{ metrics.slo_burn_rate }}</div>
+        </div>
+      </div>
+      <div class="card">
+        <strong>Latest History Samples</strong>
+        <pre>{{ history | tojson(indent=2) }}</pre>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -1,4 +1,6 @@
 import asyncio
+import math
+import random
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -25,6 +27,8 @@ templates = Jinja2Templates(directory="templates")
 CACHE_TTL = 30
 CHECK_TIMEOUT = 10.0
 HISTORY_LIMIT = 120
+FLOW_REPLAY_LIMIT = 200
+DEFAULT_SLO = 99.5
 
 SERVICES: list[dict[str, str]] = [
     {
@@ -302,6 +306,39 @@ ANNOUNCEMENTS = [
 
 _cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _service_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=HISTORY_LIMIT))
+_flow_replay: deque[dict[str, Any]] = deque(maxlen=FLOW_REPLAY_LIMIT)
+
+FLOW_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "lamino-openai": {
+        "name": "Lamino -> RainyModel -> OpenAI",
+        "nodes": ["Lamino", "RainyModel", "OpenAI API"],
+        "services": ["Lamino", "RainyModel"],
+        "provider_latency_ms": 650,
+    },
+    "lamino-openrouter": {
+        "name": "Lamino -> RainyModel -> OpenRouter",
+        "nodes": ["Lamino", "RainyModel", "OpenRouter API"],
+        "services": ["Lamino", "RainyModel"],
+        "provider_latency_ms": 520,
+    },
+    "orcest-langchain": {
+        "name": "Orcest -> LangChain -> RainyModel",
+        "nodes": ["Orcest Core", "Internal LangChain API", "RainyModel", "Provider Mesh"],
+        "services": ["Orcest AI", "RainyModel"],
+        "provider_latency_ms": 560,
+    },
+    "maestrist-routing": {
+        "name": "Maestrist -> RainyModel -> Providers",
+        "nodes": ["Maestrist", "RainyModel", "External Providers"],
+        "services": ["Maestrist", "RainyModel"],
+        "provider_latency_ms": 710,
+    },
+}
+
+DEPENDENCY_GRAPH: dict[str, list[str]] = {
+    "RainyModel": ["Lamino", "Maestrist", "Orcest AI", "Ollama Primary", "Ollama Secondary"],
+    "Login SSO": ["Orcest AI", "Lamino", "Maestrist", "Orcide"],
+}
 
 
 async def check_service(service: dict[str, str], client: httpx.AsyncClient) -> dict[str, Any]:
@@ -379,9 +416,126 @@ async def check_all_services(force: bool = False) -> dict[str, Any]:
             }
         )
 
+    _append_flow_replay(results)
+
     _cache["data"] = payload
     _cache["ts"] = now
     return payload
+
+
+def _is_failure_status(status: str) -> bool:
+    return status in {"degraded", "down", "timeout", "partial_outage"}
+
+
+def _estimate_qps(avg_latency_ms: float, has_failure: bool) -> float:
+    # Health check telemetry proxy: faster and healthy services imply higher sustainable qps.
+    base = max(0.2, min(12.0, 2200.0 / max(avg_latency_ms, 60.0)))
+    if has_failure:
+        return round(base * 0.45, 2)
+    return round(base, 2)
+
+
+def _append_flow_replay(results: list[dict[str, Any]]) -> None:
+    by_name = {r["name"]: r for r in results}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for flow_key, flow in FLOW_DEFINITIONS.items():
+        svc_points = [by_name[name] for name in flow["services"] if name in by_name]
+        if not svc_points:
+            continue
+        avg_latency = sum(p["latency_ms"] for p in svc_points) / len(svc_points)
+        provider_latency = float(flow.get("provider_latency_ms", 550))
+        total_latency = round(avg_latency + provider_latency + random.uniform(15.0, 60.0), 2)
+        has_failure = any(_is_failure_status(p["status"]) for p in svc_points)
+        status = "degraded" if has_failure else "operational"
+        qps = _estimate_qps(avg_latency, has_failure)
+        _flow_replay.append(
+            {
+                "event_id": f"{flow_key}-{int(time.time() * 1000)}-{random.randint(100, 999)}",
+                "flow_key": flow_key,
+                "flow_name": flow["name"],
+                "nodes": flow["nodes"],
+                "latency_ms": total_latency,
+                "qps": qps,
+                "status": status,
+                "checked_at": now_iso,
+            }
+        )
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    rank = (len(sorted_values) - 1) * pct
+    lo = math.floor(rank)
+    hi = math.ceil(rank)
+    if lo == hi:
+        return float(sorted_values[int(rank)])
+    return float(sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * (rank - lo))
+
+
+def _node_metrics(history: list[dict[str, Any]], slo_target: float = DEFAULT_SLO) -> dict[str, Any]:
+    total = len(history)
+    if total == 0:
+        return {
+            "samples": 0,
+            "availability_pct": 100.0,
+            "error_rate_pct": 0.0,
+            "p50_latency_ms": 0.0,
+            "p95_latency_ms": 0.0,
+            "p99_latency_ms": 0.0,
+            "status_transitions": 0,
+            "slo_target_pct": slo_target,
+            "slo_gap_pct": 0.0,
+            "slo_burn_rate": 0.0,
+        }
+    statuses = [str(p.get("status", "unknown")) for p in history]
+    latencies = [float(p.get("latency_ms", 0.0) or 0.0) for p in history]
+    errors = sum(1 for p in history if p.get("code", 0) >= 400 or _is_failure_status(str(p.get("status", ""))))
+    transitions = sum(1 for i in range(1, len(statuses)) if statuses[i] != statuses[i - 1])
+    availability = ((total - errors) / total) * 100.0
+    error_rate = (errors / total) * 100.0
+    slo_gap = max(0.0, slo_target - availability)
+    error_budget = max(0.1, 100.0 - slo_target)
+    burn_rate = round((error_rate / error_budget), 3)
+    return {
+        "samples": total,
+        "availability_pct": round(availability, 3),
+        "error_rate_pct": round(error_rate, 3),
+        "p50_latency_ms": round(_percentile(latencies, 0.50), 2),
+        "p95_latency_ms": round(_percentile(latencies, 0.95), 2),
+        "p99_latency_ms": round(_percentile(latencies, 0.99), 2),
+        "status_transitions": transitions,
+        "slo_target_pct": slo_target,
+        "slo_gap_pct": round(slo_gap, 3),
+        "slo_burn_rate": burn_rate,
+    }
+
+
+def _service_impact_payload(current: dict[str, Any]) -> dict[str, Any]:
+    by_name = {s["name"]: s for s in current["services"]}
+    impact_scores: dict[str, float] = {}
+    reasons: dict[str, str] = {}
+    for upstream, downstreams in DEPENDENCY_GRAPH.items():
+        upstream_status = by_name.get(upstream, {}).get("status", "unknown")
+        if not _is_failure_status(upstream_status):
+            continue
+        if upstream_status in {"down", "timeout"}:
+            base = 1.0
+        else:
+            base = 0.65
+        for idx, downstream in enumerate(downstreams):
+            decay = max(0.35, 1.0 - (idx * 0.12))
+            score = round(base * decay, 3)
+            impact_scores[downstream] = max(impact_scores.get(downstream, 0.0), score)
+            reasons[downstream] = f"Impacted by {upstream} ({upstream_status})"
+    return {
+        "impact_scores": impact_scores,
+        "reasons": reasons,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -431,6 +585,37 @@ async def flowchart_view_page(request: Request, view_key: str):
             "current_view": view_key,
             "view_data": view,
             "views": [{"key": key, "title": value["title"]} for key, value in TOPOLOGY_VIEWS.items()],
+        },
+    )
+
+
+@app.get("/node/{service_name}", response_class=HTMLResponse)
+async def node_drilldown_page(request: Request, service_name: str):
+    current = await check_all_services()
+    service = next((s for s in current["services"] if s["name"].lower() == service_name.lower()), None)
+    if service is None:
+        return templates.TemplateResponse(
+            "node.html",
+            {
+                "request": request,
+                "service_name": service_name,
+                "service": None,
+                "metrics": None,
+                "history": [],
+                "error_message": "Service not found.",
+            },
+            status_code=404,
+        )
+    history = list(_service_history[service["name"]])
+    metrics = _node_metrics(history)
+    return templates.TemplateResponse(
+        "node.html",
+        {
+            "request": request,
+            "service_name": service["name"],
+            "service": service,
+            "metrics": metrics,
+            "history": history[-80:],
         },
     )
 
@@ -522,6 +707,32 @@ async def api_status_node(service_name: str, limit: int = 40):
     return {
         "service": match,
         "history": list(_service_history[match["name"]])[-safe_limit:],
+        "metrics": _node_metrics(list(_service_history[match["name"]])[-safe_limit:]),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/topology/impact")
+async def api_topology_impact():
+    current = await check_all_services()
+    return _service_impact_payload(current)
+
+
+@app.get("/api/flows/replay")
+async def api_flows_replay(limit: int = 30):
+    safe_limit = max(1, min(limit, FLOW_REPLAY_LIMIT))
+    current = await check_all_services()
+    recent = list(_flow_replay)[-safe_limit:]
+    avg_qps = round(sum(r["qps"] for r in recent) / len(recent), 2) if recent else 0.0
+    avg_latency = round(sum(r["latency_ms"] for r in recent) / len(recent), 2) if recent else 0.0
+    return {
+        "summary": {
+            "events": len(recent),
+            "avg_qps": avg_qps,
+            "avg_latency_ms": avg_latency,
+            "overall": current["overall"],
+        },
+        "recent_paths": recent,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
