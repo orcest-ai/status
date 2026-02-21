@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Orcest Status Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --panel: #111827;
+      --line: #1f2937;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --link: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 6px 0; }
+    .sub { margin: 0 0 18px; color: var(--muted); }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .toolbar a, .toolbar button {
+      color: var(--text); border: 1px solid var(--line); background: var(--panel);
+      text-decoration: none; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    }
+    .toolbar a:hover, .toolbar button:hover { border-color: var(--link); color: var(--link); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; margin-bottom: 16px; }
+    .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .kpi .value { font-size: 24px; font-weight: 700; margin-top: 6px; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .card h3 { margin: 0 0 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    .status { font-weight: 700; }
+    .operational { color: var(--ok); }
+    .degraded { color: var(--warn); }
+    .down, .timeout, .partial_outage { color: var(--bad); }
+    .ann { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+    .ann .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .footer { margin-top: 16px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Orcest AI Ecosystem Status</h1>
+    <p class="sub">Real-time service monitoring, latency trends, announcements, and interactive system topology.</p>
+
+    <div class="toolbar">
+      <a href="/fc">Interactive Diagram</a>
+      <a href="/api/status?force=true" target="_blank">Raw JSON</a>
+      <button id="toggleRealtime">Pause Realtime</button>
+      <span id="updatedAt" style="color:var(--muted);padding:8px 0;"></span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="label">Overall</div><div class="value status {{ status_data.overall }}" id="overall">{{ status_data.overall }}</div></div>
+      <div class="kpi"><div class="label">Operational</div><div class="value" id="operational">{{ status_data.summary.operational }}</div></div>
+      <div class="kpi"><div class="label">Degraded</div><div class="value" id="degraded">{{ status_data.summary.degraded }}</div></div>
+      <div class="kpi"><div class="label">Down</div><div class="value" id="down">{{ status_data.summary.down }}</div></div>
+      <div class="kpi"><div class="label">Avg Latency</div><div class="value" id="avgLatency">{{ status_data.summary.avg_latency_ms }} ms</div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Services</h3>
+        <table>
+          <thead><tr><th>Service</th><th>Type</th><th>Status</th><th>Latency</th><th>Code</th></tr></thead>
+          <tbody id="serviceRows">
+            {% for svc in status_data.services %}
+            <tr>
+              <td>{{ svc.name }}</td>
+              <td>{{ svc.type }}</td>
+              <td class="status {{ svc.status }}">{{ svc.status }}</td>
+              <td>{{ svc.latency_ms }} ms</td>
+              <td>{{ svc.code }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Latency Trend (Realtime)</h3>
+        <canvas id="latencyChart" height="230"></canvas>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px;">
+      <div class="card">
+        <h3>Announcements</h3>
+        <div id="announcements">
+          {% for ann in announcements %}
+          <div class="ann">
+            <div class="meta">{{ ann.date }} · {{ ann.type }}</div>
+            <strong>{{ ann.title }}</strong>
+            <div>{{ ann.body }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="card">
+        <h3>Status Distribution</h3>
+        <canvas id="distributionChart" height="230"></canvas>
+      </div>
+    </div>
+
+    <div class="footer">Auto-updates every 8s via SSE. Fallback polling every 15s if stream fails.</div>
+  </div>
+
+  <script>
+    let realtime = true;
+    const labels = [];
+    const latData = [];
+
+    const latencyChart = new Chart(document.getElementById('latencyChart'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Avg Latency (ms)', data: latData, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.15)', tension: .3, fill: true }] },
+      options: { animation: false, scales: { y: { beginAtZero: true } }, plugins: { legend: { labels: { color: '#e2e8f0' }}}}
+    });
+
+    const distributionChart = new Chart(document.getElementById('distributionChart'), {
+      type: 'doughnut',
+      data: { labels: ['Operational', 'Degraded', 'Down'], datasets: [{ data: [0,0,0], backgroundColor: ['#22c55e','#f59e0b','#ef4444'] }] },
+      options: { animation: false, plugins: { legend: { labels: { color: '#e2e8f0' }}}}
+    });
+
+    function fmtTime(iso) {
+      try { return new Date(iso).toLocaleTimeString(); } catch (_) { return iso; }
+    }
+
+    function updateUI(data) {
+      document.getElementById('overall').textContent = data.overall;
+      document.getElementById('overall').className = 'value status ' + data.overall;
+      document.getElementById('operational').textContent = data.summary.operational;
+      document.getElementById('degraded').textContent = data.summary.degraded;
+      document.getElementById('down').textContent = data.summary.down;
+      document.getElementById('avgLatency').textContent = data.summary.avg_latency_ms + ' ms';
+      document.getElementById('updatedAt').textContent = 'Last update: ' + fmtTime(data.checked_at);
+
+      const rows = data.services.map(s => `
+        <tr>
+          <td>${s.name}</td>
+          <td>${s.type}</td>
+          <td class="status ${s.status}">${s.status}</td>
+          <td>${s.latency_ms} ms</td>
+          <td>${s.code}</td>
+        </tr>
+      `).join('');
+      document.getElementById('serviceRows').innerHTML = rows;
+
+      labels.push(fmtTime(data.checked_at));
+      latData.push(data.summary.avg_latency_ms);
+      if (labels.length > 20) { labels.shift(); latData.shift(); }
+      latencyChart.update();
+
+      distributionChart.data.datasets[0].data = [data.summary.operational, data.summary.degraded, data.summary.down];
+      distributionChart.update();
+    }
+
+    async function pollStatus() {
+      if (!realtime) return;
+      try {
+        const r = await fetch('/api/status?force=true');
+        if (!r.ok) return;
+        const data = await r.json();
+        updateUI(data);
+      } catch (_) {}
+    }
+
+    function startStream() {
+      const es = new EventSource('/api/status/stream');
+      es.onmessage = (ev) => {
+        if (!realtime) return;
+        try { updateUI(JSON.parse(ev.data)); } catch (_) {}
+      };
+      es.onerror = () => {
+        es.close();
+        setInterval(pollStatus, 15000);
+      };
+    }
+
+    document.getElementById('toggleRealtime').addEventListener('click', function() {
+      realtime = !realtime;
+      this.textContent = realtime ? 'Pause Realtime' : 'Resume Realtime';
+    });
+
+    startStream();
+  </script>
+</body>
+</html>
+
