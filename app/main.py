@@ -1,5 +1,6 @@
 import asyncio
 import math
+import os
 import random
 import time
 from collections import defaultdict, deque
@@ -7,10 +8,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 app = FastAPI(
     title="Orcest Status",
@@ -307,6 +309,24 @@ ANNOUNCEMENTS = [
 _cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _service_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=HISTORY_LIMIT))
 _flow_replay: deque[dict[str, Any]] = deque(maxlen=FLOW_REPLAY_LIMIT)
+_flow_replay_real: deque[dict[str, Any]] = deque(maxlen=FLOW_REPLAY_LIMIT)
+FLOW_INGEST_TOKEN = os.getenv("FLOW_INGEST_TOKEN", "").strip()
+
+
+class FlowEventIn(BaseModel):
+    flow_key: str = Field(default="external-flow")
+    flow_name: str = Field(default="External Request Flow")
+    source: str = Field(default="external")
+    nodes: list[str] = Field(default_factory=list)
+    latency_ms: float = Field(default=0.0, ge=0)
+    qps: float = Field(default=0.0, ge=0)
+    status: str = Field(default="operational")
+    checked_at: str | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class FlowBatchIn(BaseModel):
+    events: list[FlowEventIn]
 
 FLOW_DEFINITIONS: dict[str, dict[str, Any]] = {
     "lamino-openai": {
@@ -514,6 +534,40 @@ def _node_metrics(history: list[dict[str, Any]], slo_target: float = DEFAULT_SLO
     }
 
 
+def _normalize_flow_event(event: FlowEventIn) -> dict[str, Any]:
+    checked_at = event.checked_at or datetime.now(timezone.utc).isoformat()
+    cleaned_nodes = [str(n).strip() for n in event.nodes if str(n).strip()]
+    return {
+        "event_id": f"{event.flow_key}-{int(time.time() * 1000)}-{random.randint(100, 999)}",
+        "flow_key": event.flow_key.strip() or "external-flow",
+        "flow_name": event.flow_name.strip() or "External Request Flow",
+        "source": event.source.strip() or "external",
+        "nodes": cleaned_nodes,
+        "latency_ms": round(float(event.latency_ms), 2),
+        "qps": round(float(event.qps), 2),
+        "status": event.status.strip() or "operational",
+        "checked_at": checked_at,
+        "meta": event.meta,
+    }
+
+
+def _extract_ingest_token(authorization: str | None, x_ingest_token: str | None) -> str:
+    if x_ingest_token:
+        return x_ingest_token.strip()
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return ""
+
+
+def _verify_ingest_auth(authorization: str | None, x_ingest_token: str | None) -> None:
+    # If token is not configured, endpoint stays open for bootstrap/dev usage.
+    if not FLOW_INGEST_TOKEN:
+        return
+    token = _extract_ingest_token(authorization, x_ingest_token)
+    if token != FLOW_INGEST_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid_ingest_token")
+
+
 def _service_impact_payload(current: dict[str, Any]) -> dict[str, Any]:
     by_name = {s["name"]: s for s in current["services"]}
     impact_scores: dict[str, float] = {}
@@ -719,10 +773,13 @@ async def api_topology_impact():
 
 
 @app.get("/api/flows/replay")
-async def api_flows_replay(limit: int = 30):
+async def api_flows_replay(limit: int = 30, prefer_real: bool = True):
     safe_limit = max(1, min(limit, FLOW_REPLAY_LIMIT))
     current = await check_all_services()
-    recent = list(_flow_replay)[-safe_limit:]
+    has_real = len(_flow_replay_real) > 0
+    source_mode = "real" if (prefer_real and has_real) else "synthetic"
+    source_queue = _flow_replay_real if source_mode == "real" else _flow_replay
+    recent = list(source_queue)[-safe_limit:]
     avg_qps = round(sum(r["qps"] for r in recent) / len(recent), 2) if recent else 0.0
     avg_latency = round(sum(r["latency_ms"] for r in recent) / len(recent), 2) if recent else 0.0
     return {
@@ -731,8 +788,68 @@ async def api_flows_replay(limit: int = 30):
             "avg_qps": avg_qps,
             "avg_latency_ms": avg_latency,
             "overall": current["overall"],
+            "source_mode": source_mode,
+            "synthetic_events_available": len(_flow_replay),
+            "real_events_available": len(_flow_replay_real),
         },
         "recent_paths": recent,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.post("/api/flows/ingest")
+async def api_flows_ingest(
+    payload: FlowBatchIn,
+    authorization: str | None = Header(default=None),
+    x_ingest_token: str | None = Header(default=None),
+):
+    _verify_ingest_auth(authorization, x_ingest_token)
+    accepted = 0
+    for event in payload.events:
+        normalized = _normalize_flow_event(event)
+        if len(normalized["nodes"]) < 2:
+            continue
+        _flow_replay_real.append(normalized)
+        accepted += 1
+    return {
+        "accepted": accepted,
+        "received": len(payload.events),
+        "real_replay_size": len(_flow_replay_real),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/api/flows/ingest/single")
+async def api_flows_ingest_single(
+    payload: FlowEventIn,
+    authorization: str | None = Header(default=None),
+    x_ingest_token: str | None = Header(default=None),
+):
+    _verify_ingest_auth(authorization, x_ingest_token)
+    normalized = _normalize_flow_event(payload)
+    if len(normalized["nodes"]) < 2:
+        raise HTTPException(status_code=400, detail="nodes_must_have_at_least_two_hops")
+    _flow_replay_real.append(normalized)
+    return {
+        "accepted": 1,
+        "event_id": normalized["event_id"],
+        "real_replay_size": len(_flow_replay_real),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/flows/stream")
+async def api_flows_stream(prefer_real: bool = True):
+    async def event_generator():
+        cursor = ""
+        while True:
+            source_queue = _flow_replay_real if (prefer_real and len(_flow_replay_real) > 0) else _flow_replay
+            if source_queue:
+                latest = source_queue[-1]
+                if latest["event_id"] != cursor:
+                    cursor = latest["event_id"]
+                    yield f"data: {JSONResponse(content=latest).body.decode('utf-8')}\n\n"
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 

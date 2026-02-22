@@ -149,6 +149,7 @@
     let replayData = [];
     let selectedReplayEventId = null;
     let replayIdx = 0;
+    let replaySourceMode = 'synthetic';
 
     function normalizeLabel(v) {
       return String(v || '').replace(/\s+/g, ' ').trim();
@@ -515,9 +516,10 @@
 
     async function refreshReplay(svg) {
       try {
-        const r = await fetch('/api/flows/replay?limit=40');
+        const r = await fetch('/api/flows/replay?limit=40&prefer_real=true');
         const d = await r.json();
         replayData = d.recent_paths || [];
+        replaySourceMode = (d.summary && d.summary.source_mode) ? d.summary.source_mode : 'synthetic';
         document.getElementById('flowSummary').textContent = JSON.stringify(d.summary || {}, null, 2);
         applyFlowAnimation(svg);
         renderReplayList(svg);
@@ -530,6 +532,37 @@
       } catch (e) {
         document.getElementById('flowSummary').textContent = `replay fetch failed: ${e.message}`;
       }
+    }
+
+    function startRealtimeReplayStream(svg) {
+      const es = new EventSource('/api/flows/stream?prefer_real=true');
+      es.onmessage = (evt) => {
+        try {
+          const flow = JSON.parse(evt.data);
+          replaySourceMode = 'real';
+          replayData.push(flow);
+          if (replayData.length > 80) replayData = replayData.slice(-80);
+          selectedReplayEventId = flow.event_id;
+          drawReplayPath(svg, flow);
+          renderReplayList(svg);
+          applyFlowAnimation(svg);
+          const summary = {
+            events: replayData.length,
+            source_mode: replaySourceMode,
+            latest_flow: flow.flow_name,
+            latest_latency_ms: flow.latency_ms,
+            latest_qps: flow.qps,
+            latest_status: flow.status,
+            latest_checked_at: flow.checked_at
+          };
+          document.getElementById('flowSummary').textContent = JSON.stringify(summary, null, 2);
+        } catch (e) {
+          document.getElementById('flowSummary').textContent = `stream parse failed: ${e.message}`;
+        }
+      };
+      es.onerror = () => {
+        // Keep polling fallback active; stream might reconnect automatically.
+      };
     }
 
     function autoReplayTick(svg) {
@@ -584,6 +617,7 @@
         await refreshSnapshotAndStatus(svg);
         await refreshImpact(svg);
         await refreshReplay(svg);
+        startRealtimeReplayStream(svg);
 
         setInterval(() => refreshSnapshotAndStatus(svg), 10000);
         setInterval(() => refreshImpact(svg), 15000);
